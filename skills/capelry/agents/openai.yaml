@@ -1,0 +1,5 @@
+interface:
+  display_name: "Capelry"
+  short_description: "Search and install AI agent skills"
+  brand_color: "#5B7CFA"
+  default_prompt: "Search Capelry for a skill that solves my task and install the best match into this project."

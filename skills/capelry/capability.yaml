@@ -1,0 +1,83 @@
+apiVersion: registry.capelry.dev/v1alpha1
+kind: Capability
+metadata:
+  namespace: capelry
+  name: capelry
+  version: 0.1.0
+  title: Capelry
+spec:
+  type: skill
+  summary: Always-available bootstrap skill for searching, inspecting, installing, and packaging Capelry capabilities.
+  description: Always-available Agent Skill integration for Capelry, the AI Agent Capability Registry. Use it to bootstrap Capelry support into fresh projects, discover capabilities, and install skills into project-local or global skill directories across Skill-like agent tools.
+  docs:
+    readme: SKILL.md
+    additional:
+      - BOOTSTRAP.md
+  compatibility:
+    - target: pi
+      versionRange: "*"
+      notes: Install into .pi/skills for project-local use or ~/.pi/agent/skills for global use. Pi can also discover .agents/skills in projects.
+      metadata:
+        installPath: .pi/skills/capelry
+    - target: claude-code
+      versionRange: "*"
+      notes: Install into .claude/skills for project-local use or ~/.claude/skills for global use.
+      metadata:
+        installPath: .claude/skills/capelry
+    - target: codex-cli
+      versionRange: "*"
+      notes: Install into a Codex-readable skills directory such as ~/.codex/skills, or configure the agent to read .agents/skills.
+      metadata:
+        installPath: .agents/skills/capelry
+    - target: agents-skills
+      versionRange: "*"
+      notes: Portable Agent Skills layout. Install into .agents/skills/capelry for project-local use.
+      metadata:
+        installPath: .agents/skills/capelry
+    - target: cursor
+      versionRange: "*"
+      notes: Use as a Skill-like project instruction by pointing Cursor or its agent configuration at this SKILL.md.
+    - target: windsurf
+      versionRange: "*"
+      notes: Use as a Skill-like project instruction by pointing Windsurf or its agent configuration at this SKILL.md.
+  assets:
+    - path: BOOTSTRAP.md
+      mediaType: text/markdown
+      required: true
+    - path: agents/openai.yaml
+      mediaType: text/yaml
+      required: false
+    - path: scripts/capelry.py
+      mediaType: text/x-python
+      required: true
+    - path: scripts/bootstrap.py
+      mediaType: text/x-python
+      required: true
+  install:
+    - target: pi
+      path: .pi/skills/capelry
+      notes: Project-local Pi install. Use ~/.pi/agent/skills/capelry for global installs.
+      commands:
+        - mkdir -p .pi/skills/capelry
+        - unzip -oq capelry-0.1.0.zip -d .pi/skills/capelry
+    - target: claude-code
+      path: .claude/skills/capelry
+      notes: Project-local Claude Code install. Use ~/.claude/skills/capelry for global installs.
+      commands:
+        - mkdir -p .claude/skills/capelry
+        - unzip -oq capelry-0.1.0.zip -d .claude/skills/capelry
+    - target: codex-cli
+      path: .agents/skills/capelry
+      notes: Portable project-local install for Codex-style Skill consumers.
+      commands:
+        - mkdir -p .agents/skills/capelry
+        - unzip -oq capelry-0.1.0.zip -d .agents/skills/capelry
+  source:
+    repository: https://github.com/capelry-ai/capelry
+    path: skills/capelry
+    defaultBranch: main
+  security:
+    permissions:
+      - network:read
+      - filesystem:write
+    sandbox: User-writable skill directories only; inspect third-party skills before running bundled scripts.
