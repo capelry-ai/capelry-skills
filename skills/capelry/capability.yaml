@@ -73,7 +73,7 @@ spec:
         - mkdir -p .agents/skills/capelry
         - unzip -oq capelry-0.1.0.zip -d .agents/skills/capelry
   source:
-    repository: https://github.com/capelry-ai/capelry
+    repository: https://github.com/capelry-ai/capelry-skills
     path: skills/capelry
     defaultBranch: main
   security:

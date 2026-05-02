@@ -10,7 +10,7 @@
   <p>
     <a href="https://capelry.com"><strong>Visit Capelry</strong></a>
     ·
-    <a href="https://github.com/capelry-ai/capelry/blob/main/skills/capelry/BOOTSTRAP.md"><strong>Bootstrap an Agent</strong></a>
+    <a href="https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/BOOTSTRAP.md"><strong>Bootstrap an Agent</strong></a>
     ·
     <a href="https://github.com/capelry-ai/capelry-skills"><strong>GitHub Repo</strong></a>
   </p>
@@ -50,7 +50,7 @@ This repository contains the **Capelry registry skill**: a portable Agent Skill 
 Copy this into your agent:
 
 ```text
-Read and follow https://github.com/capelry-ai/capelry/raw/main/skills/capelry/BOOTSTRAP.md to install the Capelry skill into this project. Choose the best project-local target for this coding agent using the bootstrap guidance; if unsure, use the portable Agent Skills default.
+Read and follow https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/BOOTSTRAP.md to install the Capelry skill into this project. Choose the best project-local target for this coding agent using the bootstrap guidance; if unsure, use the portable Agent Skills default.
 ```
 
 That is all that is needed. The bootstrap prompt installs the skill from GitHub source, then the installed skill uses Capelry.com for registry operations. It is designed for fresh projects and is intentionally boring in the best way:
@@ -199,9 +199,9 @@ Useful links:
 
 - Website: [https://capelry.com](https://capelry.com)
 - Skills repository: [https://github.com/capelry-ai/capelry-skills](https://github.com/capelry-ai/capelry-skills)
-- Bootstrap source repository: [https://github.com/capelry-ai/capelry](https://github.com/capelry-ai/capelry)
-- Bootstrap prompt: [https://github.com/capelry-ai/capelry/blob/main/skills/capelry/BOOTSTRAP.md](https://github.com/capelry-ai/capelry/blob/main/skills/capelry/BOOTSTRAP.md)
-- Agent-readable bootstrap prompt: [https://github.com/capelry-ai/capelry/raw/main/skills/capelry/BOOTSTRAP.md](https://github.com/capelry-ai/capelry/raw/main/skills/capelry/BOOTSTRAP.md)
+- Bootstrap source repository: [https://github.com/capelry-ai/capelry-skills](https://github.com/capelry-ai/capelry-skills)
+- Bootstrap prompt: [https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/BOOTSTRAP.md](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/BOOTSTRAP.md)
+- Agent-readable bootstrap prompt: [https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/BOOTSTRAP.md](https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/BOOTSTRAP.md)
 - Skill instructions: [https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/SKILL.md](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/SKILL.md)
 
 ## Repository tour
@@ -236,7 +236,7 @@ Capelry prefers project-local installs, so experiments stay safely inside your r
 No problem. If your agent can read files and run Python, paste this:
 
 ```text
-Read https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/SKILL.md as project instructions. Then use the Capelry CLI from https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/scripts/capelry.py for registry operations. If installing Capelry into a different project, read and follow https://github.com/capelry-ai/capelry/raw/main/skills/capelry/BOOTSTRAP.md first.
+Read https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/SKILL.md as project instructions. Then use the Capelry CLI from https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/scripts/capelry.py for registry operations. If installing Capelry into a different project, read and follow https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/BOOTSTRAP.md first.
 ```
 
 ## Browse safely
@@ -247,5 +247,5 @@ Skills are executable instructions. Before running third-party scripts, ask your
 
 <div align="center">
   <p><strong>Ready?</strong></p>
-  <p>Send your agent to <a href="https://github.com/capelry-ai/capelry/raw/main/skills/capelry/BOOTSTRAP.md">BOOTSTRAP.md</a> and let it start foraging for skills. 🌿</p>
+  <p>Send your agent to <a href="https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/BOOTSTRAP.md">BOOTSTRAP.md</a> and let it start foraging for skills. 🌿</p>
 </div>
