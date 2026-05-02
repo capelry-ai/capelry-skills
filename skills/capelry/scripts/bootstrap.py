@@ -7,7 +7,7 @@ to the registry. After install, normal registry operations still default to
 https://capelry.com via scripts/capelry.py.
 
 Defaults:
-  source: https://github.com/capelry-ai/capelry
+  source: https://github.com/capelry-ai/capelry-skills
   ref:    main
   paths:  skills/capelry, .pi/skills/capelry
   dest:   .agents/skills/capelry
@@ -27,7 +27,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
-DEFAULT_SOURCE_REPOSITORY = "https://github.com/capelry-ai/capelry"
+DEFAULT_SOURCE_REPOSITORY = "https://github.com/capelry-ai/capelry-skills"
 DEFAULT_SOURCE_REF = "main"
 DEFAULT_SOURCE_PATHS = ("skills/capelry", ".pi/skills/capelry")
 DEFAULT_SKILLS_DIR = ".agents/skills"

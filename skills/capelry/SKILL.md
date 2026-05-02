@@ -42,7 +42,7 @@ After installing, tell the user to reload/restart their agent. For Pi, use `/rel
 
 ## Bootstrap a Fresh Project
 
-When the user asks to add Capelry to a fresh repository, read and follow `BOOTSTRAP.md`. Bootstrapping installs this skill from GitHub source at `https://github.com/capelry-ai/capelry`, not from Capelry.com. Choose the project-local install target that matches the active coding agent when you know it; if unsure, use the portable Agent Skills target `.agents/skills/capelry`. If this package is already checked out or extracted, use `python scripts/bootstrap.py`.
+When the user asks to add Capelry to a fresh repository, read and follow `BOOTSTRAP.md`. Bootstrapping installs this skill from GitHub source at `https://github.com/capelry-ai/capelry-skills`, not from Capelry.com. Choose the project-local install target that matches the active coding agent when you know it; if unsure, use the portable Agent Skills target `.agents/skills/capelry`. If this package is already checked out or extracted, use `python scripts/bootstrap.py`.
 
 ## Registry Workflows
 

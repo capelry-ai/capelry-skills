@@ -5,7 +5,7 @@ This file is the fresh-project entry point for installing the `capelry` skill.
 Bootstrapping installs the skill from GitHub source, not from Capelry.com:
 
 ```text
-https://github.com/capelry-ai/capelry
+https://github.com/capelry-ai/capelry-skills
 ```
 
 After install, normal search/inspect/install registry workflows use Capelry.com:
@@ -25,18 +25,18 @@ https://capelry.com
 Run these commands from the root of the project where you want agents to use Capelry. By default, they install into the portable project-local Agent Skills location. If you know the active coding agent has a native project skill directory, choose one of the target options below instead.
 
 ```text
-python -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/capelry-ai/capelry/main/skills/capelry/scripts/bootstrap.py', 'capelry-bootstrap.py')"
+python -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/capelry-ai/capelry-skills/main/skills/capelry/scripts/bootstrap.py', 'capelry-bootstrap.py')"
 python capelry-bootstrap.py
 ```
 
 For PowerShell, the same commands work. If your Python launcher is `py`, use `py` instead of `python`:
 
 ```powershell
-py -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/capelry-ai/capelry/main/skills/capelry/scripts/bootstrap.py', 'capelry-bootstrap.py')"
+py -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/capelry-ai/capelry-skills/main/skills/capelry/scripts/bootstrap.py', 'capelry-bootstrap.py')"
 py capelry-bootstrap.py
 ```
 
-The downloaded `capelry-bootstrap.py` script fetches the skill source from `https://github.com/capelry-ai/capelry` and copies only the Capelry skill directory into your project.
+The downloaded `capelry-bootstrap.py` script fetches the skill source from `https://github.com/capelry-ai/capelry-skills` and copies only the Capelry skill directory into your project.
 
 Agent note: if you know you are running inside Pi, Claude Code, Codex, or another coding agent with a preferred skill location, use the install target guidance below and pass the matching `--target`. If you are unsure, the default portable target is safe.
 
@@ -83,7 +83,7 @@ py .\skills\capelry\scripts\bootstrap.py
 Useful options:
 
 ```text
-python scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry --ref main --target agents-project
+python scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref main --target agents-project
 python scripts/bootstrap.py --target pi-project
 python scripts/bootstrap.py --target claude-project
 python scripts/bootstrap.py --target codex-project
@@ -99,7 +99,7 @@ The bootstrap script reads these optional variables:
 
 | Variable                       | Default                              | Purpose                                      |
 | ------------------------------ | ------------------------------------ | -------------------------------------------- |
-| `CAPELRY_BOOTSTRAP_REPOSITORY` | `https://github.com/capelry-ai/capelry` | GitHub source repository                  |
+| `CAPELRY_BOOTSTRAP_REPOSITORY` | `https://github.com/capelry-ai/capelry-skills` | GitHub source repository                  |
 | `CAPELRY_BOOTSTRAP_REF`        | `main`                               | Git ref, branch, tag, or SHA                 |
 | `CAPELRY_BOOTSTRAP_PATH`       | auto-detect                          | Skill path inside the repository             |
 | `CAPELRY_BOOTSTRAP_TARGET`     | unset                                | Known install target, e.g. `pi-project`      |
@@ -111,7 +111,7 @@ The installed Capelry CLI reads `CAPELRY_REGISTRY_URL` when you want registry op
 Bash/zsh examples:
 
 ```bash
-export CAPELRY_BOOTSTRAP_REPOSITORY="https://github.com/capelry-ai/capelry"
+export CAPELRY_BOOTSTRAP_REPOSITORY="https://github.com/capelry-ai/capelry-skills"
 export CAPELRY_BOOTSTRAP_TARGET="pi-project"
 python scripts/bootstrap.py
 ```
@@ -119,7 +119,7 @@ python scripts/bootstrap.py
 PowerShell examples:
 
 ```powershell
-$env:CAPELRY_BOOTSTRAP_REPOSITORY = "https://github.com/capelry-ai/capelry"
+$env:CAPELRY_BOOTSTRAP_REPOSITORY = "https://github.com/capelry-ai/capelry-skills"
 $env:CAPELRY_BOOTSTRAP_TARGET = "pi-project"
 py .\scripts\bootstrap.py
 ```
@@ -127,7 +127,7 @@ py .\scripts\bootstrap.py
 Windows `cmd.exe` examples:
 
 ```bat
-set CAPELRY_BOOTSTRAP_REPOSITORY=https://github.com/capelry-ai/capelry
+set CAPELRY_BOOTSTRAP_REPOSITORY=https://github.com/capelry-ai/capelry-skills
 set CAPELRY_BOOTSTRAP_TARGET=pi-project
 py scripts\bootstrap.py
 ```
@@ -211,7 +211,7 @@ py <capelry-skill-dir>/scripts/capelry.py install openai/skill-creator --target 
 
 ## Manual install fallback
 
-1. Download the source archive from `https://github.com/capelry-ai/capelry/archive/refs/heads/main.zip`.
+1. Download the source archive from `https://github.com/capelry-ai/capelry-skills/archive/refs/heads/main.zip`.
 2. Extract the Capelry skill directory. The bootstrap script auto-detects `skills/capelry` and `.pi/skills/capelry`; use whichever exists in the archive.
 3. Copy it so `SKILL.md` lands at one of these paths:
    - `.agents/skills/capelry/SKILL.md`
@@ -225,5 +225,5 @@ py <capelry-skill-dir>/scripts/capelry.py install openai/skill-creator --target 
 If a tool has no skill installer but can read files, paste this instruction:
 
 ```text
-Install the Capelry skill from https://github.com/capelry-ai/capelry into this project as a project-local Agent Skill. Choose the best project-local skill directory for this coding agent; if unsure, use the portable Agent Skills default at .agents/skills/capelry/SKILL.md. Use the source path skills/capelry; if that path is not present, try .pi/skills/capelry. Then use it to search and install capabilities from Capelry.com.
+Install the Capelry skill from https://github.com/capelry-ai/capelry-skills into this project as a project-local Agent Skill. Choose the best project-local skill directory for this coding agent; if unsure, use the portable Agent Skills default at .agents/skills/capelry/SKILL.md. Use the source path skills/capelry; if that path is not present, try .pi/skills/capelry. Then use it to search and install capabilities from Capelry.com.
 ```
