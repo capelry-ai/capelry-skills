@@ -186,10 +186,22 @@ Search Capelry:
 python3 <capelry-skill-dir>/scripts/capelry.py search "skill creator" --type skill --status passed
 ```
 
-Inspect a capability before installing:
+Build a discovery shortlist for a task:
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py discover "feature planning skills" --query "feature planning,feature,prd,implementation plan" --top 5 --install-snippet pi-project
+```
+
+Inspect one capability before installing:
 
 ```text
 python3 <capelry-skill-dir>/scripts/capelry.py info openai/skill-creator --install-snippet pi-project
+```
+
+Batch-inspect several refs before installing:
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py bulk-info openai/skill-creator capelry/capelry --install-snippet pi-project
 ```
 
 Install a skill into the portable project location:

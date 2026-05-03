@@ -18,7 +18,7 @@ Set `CAPELRY_REGISTRY_URL` to use a private, staging, or self-hosted Capelry reg
 
 ## Python launcher
 
-Examples use `python3`, which is the safest default in Linux, macOS, and Pi environments. If `python3` is unavailable, substitute the launcher that exists in the target environment, such as `py` on Windows or `python` where it points to Python 3.9+.
+Examples use `python3`, which is the safest default in Linux, macOS, and Pi environments. If a copied example uses `python` and that command is unavailable, retry with `python3`. If `python3` is unavailable, substitute the launcher that exists in the target environment, such as `py` on Windows or `python` where it points to Python 3.9+.
 
 ## Fast Path: Search → Info → Compare → Install
 
@@ -44,30 +44,53 @@ If this skill is installed somewhere else, run the script from that installed pa
 
 ## Discovery Workflow
 
-When a user describes a task, run a small discovery loop instead of a single exact search.
+When a user says “find me skills for X”, produce a useful shortlist instead of dumping raw search output or issuing many one-off info calls.
 
-1. Search the original phrase.
-2. If results are weak or empty, expand the query automatically using adjacent terms, synonyms, and task categories.
-3. Filter for the requested package type and validation status when useful, e.g. `--type skill --status passed`.
-4. Inspect the top candidates with `info`; compare source, status, summary, checksum, and relevance.
-5. Recommend a short list or bundle. Install only after the user confirms, or when the user already asked to install a specific known capability.
+Recommended agent algorithm, aligned with the Capelry API docs at `https://capelry.com/docs/api`:
 
-Agent-friendly search example:
+1. Generate 3-6 related queries from the user's phrase. Remove generic words like “skill” or “capability”.
+2. Search with narrow filters first: `--type skill --status passed` and a small top-N target.
+3. Batch-inspect the shortlisted refs with `bulk-info` / `batch-info` (uses `POST /api/capabilities/bulk`, max 25 refs) instead of fan-out detail calls.
+4. Compare trust/install metadata: validation status, source, `actionMetadata.safetyTrustSignals`, readme preview, install instructions, and checksum.
+5. Return a concise shortlist using the output format below. Install only after user confirmation unless the user requested a specific known capability.
+
+Preferred CLI for agentic discovery:
 
 ```text
-python3 .pi/skills/capelry/scripts/capelry.py search "production readiness" --expand --type skill --status passed --install-snippet pi-project --explain-relevance
+python3 .pi/skills/capelry/scripts/capelry.py discover "feature planning skills" --query "feature planning" --query feature --query prd --query "implementation plan" --top 5 --install-snippet pi-project
+```
+
+Equivalent manual batch flow:
+
+```text
+python3 .pi/skills/capelry/scripts/capelry.py search "feature planning" --type skill --status passed --limit 10
+python3 .pi/skills/capelry/scripts/capelry.py search prd --expand --type skill --status passed --limit 10
+python3 .pi/skills/capelry/scripts/capelry.py bulk-info phuryn/prioritize-features phuryn/sprint-plan --install-snippet pi-project
+```
+
+Recommended shortlist output format:
+
+```text
+1. namespace/name@version
+   type: skill
+   summary: ...
+   source: https://github.com/org/repo
+   source path: path/in/repo
+   page: https://capelry.com/namespace/name
+   checksum: <sha256>
+   install: python3 .pi/skills/capelry/scripts/capelry.py install namespace/name --target pi-project
 ```
 
 Machine-readable variant:
 
 ```text
-python3 .pi/skills/capelry/scripts/capelry.py search "production readiness" --expand --type skill --status passed --source github/awesome-copilot --install-snippet pi-project --explain-relevance --json
+python3 .pi/skills/capelry/scripts/capelry.py discover "feature planning skills" --query "feature planning,feature,prd,implementation plan" --top 5 --install-snippet pi-project --json
 ```
 
 If exact search fails, try related searches such as:
 
-- nouns from the request: `production`, `readiness`
-- adjacent workflow terms: `preflight`, `rollout`, `release plan`, `deployment`
+- feature planning: `feature planning`, `feature`, `prd`, `product requirements document`, `implementation plan`, `specification`, `roadmap`
+- production readiness: `production`, `readiness`, `preflight`, `rollout`, `release plan`, `deployment`
 - operational terms: `SRE`, `observability`, `monitoring`, `incident response`
 - safety terms: `hardening`, `hardening docker`, `container image hardening`, `RBAC hardening`
 - resilience terms: `backup`, `recovery`, `backup integrity`
@@ -106,6 +129,8 @@ When the user asks to add Capelry to a fresh repository, read and follow `BOOTST
 
 ## Registry Workflows
 
+API reference: `https://capelry.com/docs/api`; machine-readable OpenAPI: `GET https://capelry.com/api/openapi`. Read endpoints do not require auth. On `api_read_timeout`, honor `retry-after` and retry with fewer refs or narrower filters.
+
 ### Search
 
 ```text
@@ -116,13 +141,22 @@ Useful search flags:
 
 - `--expand`: search related terms for broader discovery.
 - `--json`: emit machine-readable output.
-- `--type skill`: filter package type.
-- `--status passed`: filter validation status.
+- `--type skill`: filter package type. API also accepts prompt, command, extension, agent, hook, rule, workflow, and collection.
+- `--status passed`: filter validation status. API name: `validation=passed`.
+- `--domain devops` / `--phase production`: use derived API facets when helpful.
 - `--source github/awesome-copilot`: filter by source repository.
 - `--install-snippet pi-project`: include a ready install command for that target.
 - `--explain-relevance`: add why each result matched.
 
-Direct API endpoint: `GET {CAPELRY_REGISTRY_URL}/api/capabilities?q=query`.
+Direct API endpoint: `GET {CAPELRY_REGISTRY_URL}/api/capabilities?q=query&type=skill&validation=passed&limit=10`. Search supports `limit`, `page`, and `offset`; API docs list 25 default / 100 max.
+
+### Discover Shortlist
+
+Use `discover` for “find me skills for X”. It batches related searches, dedupes refs, bulk-inspects top results, and prints name/type/summary/source/page/checksum/install command.
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py discover "feature planning skills" --query "feature planning,feature,prd,implementation plan" --top 5 --install-snippet pi-project
+```
 
 ### Inspect
 
@@ -130,15 +164,26 @@ Direct API endpoint: `GET {CAPELRY_REGISTRY_URL}/api/capabilities?q=query`.
 python3 <capelry-skill-dir>/scripts/capelry.py info namespace/name --install-snippet pi-project
 ```
 
-Direct API endpoint: `GET {CAPELRY_REGISTRY_URL}/api/capabilities/namespace/name`.
+Direct API endpoint: `GET {CAPELRY_REGISTRY_URL}/api/capabilities/namespace/name`. Add `include=related` in custom clients only when related recommendations are needed.
+
+### Batch Inspect
+
+Use `bulk-info` (alias: `batch-info`) for a shortlist. It uses the documented bulk API and avoids repeated one-off `info` calls.
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py bulk-info namespace/name other/name --install-snippet pi-project
+```
+
+Direct API endpoint: `POST {CAPELRY_REGISTRY_URL}/api/capabilities/bulk` with `{"refs":["namespace/name","other/name"]}`. Bulk accepts 1-25 unique refs and returns `capabilities[]`, per-ref `errors[]`, and `actionMetadata`.
 
 ### Compare Before Installing
 
-Inspect at least one candidate, and usually two or three, before installing third-party skills. Compare:
+Inspect at least one candidate, and usually two or three, before installing third-party skills. Use `bulk-info` for shortlists. Compare:
 
 - package type and validation status
 - summary and detailed description
 - source repository and source path
+- `actionMetadata.safetyTrustSignals`, readme preview, install instructions, and required tools when present
 - latest version and checksum
 - whether the capability matches this project stack
 
