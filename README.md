@@ -71,6 +71,7 @@ Once installed, the Capelry skill helps your agent:
 | Superpower | What it means |
 | --- | --- |
 | 🔎 Search | Find relevant capabilities from Capelry. |
+| 🧭 Discover | Batch related searches and bulk-inspect top refs into an actionable shortlist. |
 | 📖 Inspect | Read metadata, versions, source info, and checksums before installing. |
 | 📦 Install | Add skills into project-local or global skill directories. |
 | 🛠️ Package and publish | Prepare capability archives for the registry. |
@@ -82,7 +83,7 @@ In short: describe the job, and Capelry helps your agent find the right capabili
 Once Capelry is installed, reload or restart your agent so it notices the new skill. Then give it a clear first mission:
 
 ```text
-Use Capelry to search for a skill that helps create agent skills, inspect the best match, and install it into this project.
+Use Capelry to discover a shortlist of skills that help create agent skills, inspect the best match, and install it into this project.
 ```
 
 ### Claude Code
@@ -172,8 +173,10 @@ You can always run the bundled CLI directly from the installed skill. Examples u
 For Pi project-local installs:
 
 ```text
+python3 .pi/skills/capelry/scripts/capelry.py discover "feature planning skills" --query "feature planning,feature,prd,implementation plan" --top 5 --install-snippet pi-project
 python3 .pi/skills/capelry/scripts/capelry.py search "skill creator" --type skill --status passed
 python3 .pi/skills/capelry/scripts/capelry.py info openai/skill-creator --install-snippet pi-project
+python3 .pi/skills/capelry/scripts/capelry.py bulk-info openai/skill-creator capelry/capelry --install-snippet pi-project
 python3 .pi/skills/capelry/scripts/capelry.py install openai/skill-creator --target pi-project
 ```
 
@@ -185,10 +188,10 @@ python3 .agents/skills/capelry/scripts/capelry.py info openai/skill-creator --in
 python3 .agents/skills/capelry/scripts/capelry.py install openai/skill-creator --target agents-project
 ```
 
-Agent-friendly discovery output is available with filters and JSON:
+Agent-friendly discovery output is available with filters and JSON. `discover` batches related searches and calls the Capelry bulk detail API for the shortlist:
 
 ```text
-python3 .pi/skills/capelry/scripts/capelry.py search "production readiness" --expand --type skill --status passed --source github/awesome-copilot --install-snippet pi-project --explain-relevance --json
+python3 .pi/skills/capelry/scripts/capelry.py discover "production readiness" --top 5 --install-snippet pi-project --json
 ```
 
 ## Registry URL
@@ -208,6 +211,8 @@ CAPELRY_REGISTRY_URL=https://your-registry.example.com
 Useful links:
 
 - Website: [https://capelry.com](https://capelry.com)
+- API docs: [https://capelry.com/docs/api](https://capelry.com/docs/api)
+- OpenAPI JSON: [https://capelry.com/api/openapi](https://capelry.com/api/openapi)
 - Skills repository: [https://github.com/capelry-ai/capelry-skills](https://github.com/capelry-ai/capelry-skills)
 - Bootstrap source repository: [https://github.com/capelry-ai/capelry-skills](https://github.com/capelry-ai/capelry-skills)
 - Bootstrap prompt: [https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/BOOTSTRAP.md](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/BOOTSTRAP.md)

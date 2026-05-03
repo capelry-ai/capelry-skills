@@ -44,6 +44,10 @@ STOP_WORDS = {
     "the",
     "to",
     "with",
+    "capability",
+    "capabilities",
+    "skill",
+    "skills",
 }
 
 PRODUCTION_READINESS_QUERIES = (
@@ -63,6 +67,16 @@ PRODUCTION_READINESS_QUERIES = (
     "readiness",
 )
 
+FEATURE_PLANNING_QUERIES = (
+    "feature planning",
+    "feature",
+    "prd",
+    "product requirements document",
+    "implementation plan",
+    "specification",
+    "roadmap",
+)
+
 TERM_EXPANSIONS = {
     "backup": ("backup integrity", "recovery", "ransomware backup"),
     "container": ("container image hardening", "docker", "trivy"),
@@ -71,11 +85,15 @@ TERM_EXPANSIONS = {
     "deployment": ("preflight", "rollout", "release plan"),
     "devops": ("rollout", "preflight", "SRE"),
     "docker": ("hardening docker", "container image hardening", "docker bench security", "trivy"),
+    "feature": FEATURE_PLANNING_QUERIES,
+    "features": FEATURE_PLANNING_QUERIES,
     "hardening": ("container image hardening", "hardening docker", "rbac hardening", "kubernetes"),
     "incident": ("incident response", "incident response playbook"),
     "k8s": ("kubernetes", "rbac hardening", "platform sre kubernetes"),
     "kubernetes": ("k8s", "rbac hardening", "platform sre kubernetes", "azure kubernetes readiness"),
     "observability": ("monitoring", "SRE"),
+    "planning": FEATURE_PLANNING_QUERIES,
+    "prd": FEATURE_PLANNING_QUERIES,
     "prod": PRODUCTION_READINESS_QUERIES,
     "production": PRODUCTION_READINESS_QUERIES,
     "readiness": PRODUCTION_READINESS_QUERIES,
@@ -113,6 +131,28 @@ def fetch_bytes(url: str) -> bytes:
 
 def fetch_json(url: str) -> Any:
     return json.loads(fetch_bytes(url).decode("utf-8"))
+
+
+def post_json(url: str, payload: dict[str, Any]) -> Any:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "User-Agent": "capelry-skill/0.1",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        body_text = error.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"HTTP {error.code} for {url}\n{body_text}") from error
+    except urllib.error.URLError as error:
+        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
 
 
 def print_json(payload: Any) -> None:
@@ -187,8 +227,31 @@ def latest_version(capability: dict[str, Any]) -> str:
     return version
 
 
-def search_capabilities(base: str, query: str) -> list[dict[str, Any]]:
-    encoded = urllib.parse.urlencode({"q": query})
+def search_capabilities(
+    base: str,
+    query: str,
+    *,
+    package_type: str | None = None,
+    status: str | None = None,
+    domain: str | None = None,
+    phase: str | None = None,
+    source: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    params: dict[str, str] = {"q": query}
+    if package_type:
+        params["type"] = package_type
+    if status:
+        params["validation"] = status
+    if domain:
+        params["domain"] = domain
+    if phase:
+        params["phase"] = phase
+    if source:
+        params["source"] = source
+    if limit:
+        params["limit"] = str(limit)
+    encoded = urllib.parse.urlencode(params)
     payload = fetch_json(api_url(base, f"/api/capabilities?{encoded}"))
     capabilities = payload.get("capabilities", [])
     return capabilities if isinstance(capabilities, list) else []
@@ -218,6 +281,8 @@ def expanded_queries(query: str) -> list[str]:
 
     if "production readiness" in lower or {"production", "readiness"}.issubset(set(tokens)):
         seeds.extend(PRODUCTION_READINESS_QUERIES)
+    if "feature planning" in lower or {"feature", "planning"}.issubset(set(tokens)):
+        seeds.extend(FEATURE_PLANNING_QUERIES)
 
     for token in tokens:
         seeds.extend(TERM_EXPANSIONS.get(token, ()))
@@ -330,6 +395,25 @@ def install_snippet(ref: str, target: str) -> str:
     return f"{script_invocation()} install {shlex.quote(ref)} --target {shlex.quote(target)}"
 
 
+def parse_ref_list(values: list[str]) -> list[str]:
+    refs: list[str] = []
+    for value in values:
+        refs.extend(part.strip() for part in value.split(","))
+    result: list[str] = []
+    for ref in dedupe(refs):
+        parse_ref(ref)
+        result.append(ref)
+    if not result:
+        raise SystemExit("At least one capability ref is required")
+    if len(result) > 25:
+        raise SystemExit("Bulk detail accepts at most 25 unique refs")
+    return result
+
+
+def bulk_capability_details(base: str, refs: list[str]) -> dict[str, Any]:
+    return post_json(api_url(base, "/api/capabilities/bulk"), {"refs": refs})
+
+
 def capability_output(
     capability: dict[str, Any],
     base: str,
@@ -355,13 +439,69 @@ def capability_output(
     return output
 
 
-def command_search(args: argparse.Namespace) -> None:
-    base = registry_base(args)
-    queries = expanded_queries(args.query) if args.expand else [args.query]
-    capabilities_by_ref: dict[str, dict[str, Any]] = {}
+def action_metadata_for_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    action_metadata = entry.get("actionMetadata") or {}
+    return action_metadata if isinstance(action_metadata, dict) else {}
 
+
+def detail_summary(entry: dict[str, Any], base: str, install_target: str | None) -> dict[str, Any]:
+    capability = entry.get("capability") or entry
+    if not isinstance(capability, dict):
+        capability = {}
+    ref = entry.get("ref") if isinstance(entry.get("ref"), str) else capability_ref(capability)
+    latest = capability.get("latestVersion") or {}
+    action_metadata = action_metadata_for_entry(entry)
+    safety = action_metadata.get("safetyTrustSignals") or {}
+    checksum = latest.get("checksumSha256") or safety.get("checksumSha256")
+    repository = source_repository(capability) or safety.get("sourceRepository") or ""
+    summary = capability.get("summary") or capability.get("description") or ""
+
+    output = {
+        "ref": ref,
+        "name": ref,
+        "version": latest.get("version") or capability_version(capability),
+        "type": capability_type(capability),
+        "status": latest.get("validationStatus") or safety.get("validationStatus") or capability_status(capability),
+        "summary": summary,
+        "source": repository,
+        "sourcePath": source_path(capability) or None,
+        "page": f"{base}/{ref}",
+        "checksum": checksum,
+    }
+    if install_target:
+        output["installCommand"] = install_snippet(ref, install_target)
+    return output
+
+
+def print_detail_summaries(summaries: list[dict[str, Any]]) -> None:
+    for index, item in enumerate(summaries, start=1):
+        print(f"{index}. {item['name']}@{item.get('version', '?')}")
+        print(f"   type: {item.get('type', '?')}")
+        print(f"   summary: {item.get('summary') or ''}")
+        if item.get("source"):
+            print(f"   source: {item['source']}")
+        if item.get("sourcePath"):
+            print(f"   source path: {item['sourcePath']}")
+        print(f"   page: {item['page']}")
+        if item.get("checksum"):
+            print(f"   checksum: {item['checksum']}")
+        if item.get("installCommand"):
+            print(f"   install: {item['installCommand']}")
+
+
+def collect_search_results(base: str, args: argparse.Namespace, queries: list[str], per_query_limit: int | None = None) -> list[dict[str, Any]]:
+    capabilities_by_ref: dict[str, dict[str, Any]] = {}
     for query in queries:
-        for item in search_capabilities(base, query):
+        for item in search_capabilities(
+            base,
+            query,
+            package_type=getattr(args, "package_type", None),
+            status=getattr(args, "status", None),
+            domain=getattr(args, "domain", None),
+            phase=getattr(args, "phase", None),
+            source=getattr(args, "source", None),
+            limit=per_query_limit,
+        ):
             ref = capability_ref(item)
             if ref == "None/None":
                 continue
@@ -370,9 +510,13 @@ def command_search(args: argparse.Namespace) -> None:
                 copy["_capelryMatchedQueries"] = []
                 capabilities_by_ref[ref] = copy
             capabilities_by_ref[ref]["_capelryMatchedQueries"].append(query)
+    return filter_capabilities(list(capabilities_by_ref.values()), args)
 
-    capabilities = list(capabilities_by_ref.values())
-    filtered = filter_capabilities(capabilities, args)
+
+def command_search(args: argparse.Namespace) -> None:
+    base = registry_base(args)
+    queries = expanded_queries(args.query) if args.expand else [args.query]
+    filtered = collect_search_results(base, args, queries, per_query_limit=max(args.limit, 25))
     limited = filtered[: args.limit]
 
     if args.json_output:
@@ -385,6 +529,8 @@ def command_search(args: argparse.Namespace) -> None:
                     "type": args.package_type,
                     "status": args.status,
                     "source": args.source,
+                    "domain": args.domain,
+                    "phase": args.phase,
                 },
                 "count": len(filtered),
                 "limit": args.limit,
@@ -447,6 +593,83 @@ def command_info(args: argparse.Namespace) -> None:
         print(f"checksum: {latest['checksumSha256']}")
     if args.install_snippet:
         print(f"install: {install_snippet(ref, args.install_snippet)}")
+
+
+def command_bulk_info(args: argparse.Namespace) -> None:
+    base = registry_base(args)
+    refs = parse_ref_list(args.refs)
+    payload = bulk_capability_details(base, refs)
+    entries = payload.get("capabilities", [])
+    summaries = [detail_summary(entry, base, args.install_snippet) for entry in entries if isinstance(entry, dict)]
+
+    if args.json_output:
+        print_json({"registry": base, "refs": refs, "shortlist": summaries, "bulk": payload})
+        return
+
+    if summaries:
+        print_detail_summaries(summaries)
+    for error in payload.get("errors", []) or []:
+        if isinstance(error, dict):
+            print(f"error: {error.get('ref', '?')}: {error.get('code', '?')} - {error.get('message', '')}")
+
+
+def compact_query(query: str) -> str:
+    return " ".join(tokenize(query)) or query.strip()
+
+
+def discover_queries(query: str, extra_queries: list[str] | None, expand: bool) -> list[str]:
+    compact = compact_query(query)
+    seeds: list[str] = []
+    if expand:
+        seeds.extend(expanded_queries(query)[1:])
+    seeds.extend([compact, query])
+    for extra in extra_queries or []:
+        seeds.extend(compact_query(part) for part in extra.split(","))
+    return dedupe(seeds)
+
+
+def command_discover(args: argparse.Namespace) -> None:
+    base = registry_base(args)
+    queries = discover_queries(args.query, args.extra_query, expand=not args.no_expand)
+    top = min(max(args.top, 1), 25)
+    filtered = collect_search_results(base, args, queries, per_query_limit=max(args.search_limit, top, 25))
+    refs = [capability_ref(item) for item in filtered[:top]]
+
+    payload: dict[str, Any] = {"capabilities": [], "errors": [], "meta": {"requested": 0, "returned": 0, "limit": 25}}
+    summaries: list[dict[str, Any]] = []
+    if refs:
+        payload = bulk_capability_details(base, refs)
+        summaries = [detail_summary(entry, base, args.install_snippet) for entry in payload.get("capabilities", []) if isinstance(entry, dict)]
+
+    if args.json_output:
+        print_json(
+            {
+                "registry": base,
+                "query": args.query,
+                "queries": queries,
+                "filters": {
+                    "type": args.package_type,
+                    "status": args.status,
+                    "source": args.source,
+                    "domain": args.domain,
+                    "phase": args.phase,
+                },
+                "refs": refs,
+                "shortlist": summaries,
+                "bulkErrors": payload.get("errors", []),
+            }
+        )
+        return
+
+    if not refs:
+        print("No capabilities found.")
+        return
+
+    print("Queries: " + "; ".join(queries))
+    print_detail_summaries(summaries)
+    for error in payload.get("errors", []) or []:
+        if isinstance(error, dict):
+            print(f"error: {error.get('ref', '?')}: {error.get('code', '?')} - {error.get('message', '')}")
 
 
 def safe_zip_members(zf: zipfile.ZipFile):
@@ -641,11 +864,12 @@ def add_json_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_install_snippet_argument(parser: argparse.ArgumentParser) -> None:
+def add_install_snippet_argument(parser: argparse.ArgumentParser, default: str | None = None) -> None:
     parser.add_argument(
         "--install-snippet",
         nargs="?",
         const="agents-project",
+        default=default,
         choices=sorted(TARGET_ROOTS),
         help="Include a python3 install command for the given target, e.g. pi-project",
     )
@@ -665,16 +889,43 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--type", dest="package_type", help="Filter by package type, e.g. skill, agent, prompt")
     search.add_argument("--status", help="Filter by latest validation status, e.g. passed")
     search.add_argument("--source", help="Filter by source repository, e.g. github/awesome-copilot")
+    search.add_argument("--domain", help="Filter by derived domain facet, e.g. devops, docker, sre")
+    search.add_argument("--phase", help="Filter by lifecycle facet, e.g. production, preflight, observability")
     add_install_snippet_argument(search)
     search.add_argument("--explain-relevance", action="store_true", help="Explain why each result may be relevant")
     add_json_argument(search)
     search.set_defaults(func=command_search)
+
+    discover = subparsers.add_parser("discover", help="Search related queries, bulk-inspect top results, and print a shortlist")
+    discover.add_argument("query")
+    discover.add_argument("--query", dest="extra_query", action="append", help="Additional related query; repeat or comma-separate")
+    discover.add_argument("--top", type=int, default=5, help="Number of top refs to bulk-inspect (max 25)")
+    discover.add_argument("--search-limit", type=int, default=10, help="Per-query search limit before dedupe")
+    discover.add_argument("--no-expand", action="store_true", help="Disable built-in related-query expansion")
+    discover.add_argument("--type", dest="package_type", default="skill", help="Filter by package type (default: skill)")
+    discover.add_argument("--status", default="passed", help="Filter by validation status (default: passed)")
+    discover.add_argument("--source", help="Filter by source repository, e.g. github/awesome-copilot")
+    discover.add_argument("--domain", help="Filter by derived domain facet, e.g. devops, docker, sre")
+    discover.add_argument("--phase", help="Filter by lifecycle facet, e.g. production, preflight, observability")
+    add_install_snippet_argument(discover, default="pi-project")
+    add_json_argument(discover)
+    discover.set_defaults(func=command_discover)
 
     info = subparsers.add_parser("info", help="Show capability details")
     info.add_argument("ref", help="namespace/name")
     add_install_snippet_argument(info)
     add_json_argument(info)
     info.set_defaults(func=command_info)
+
+    bulk_info = subparsers.add_parser(
+        "bulk-info",
+        aliases=["batch-info"],
+        help="Bulk-inspect up to 25 refs with /api/capabilities/bulk",
+    )
+    bulk_info.add_argument("refs", nargs="+", help="Refs as space-separated or comma-separated namespace/name values")
+    add_install_snippet_argument(bulk_info, default="pi-project")
+    add_json_argument(bulk_info)
+    bulk_info.set_defaults(func=command_bulk_info)
 
     install = subparsers.add_parser("install", help="Install a skill capability")
     install.add_argument("ref", help="namespace/name or namespace/name@version")
