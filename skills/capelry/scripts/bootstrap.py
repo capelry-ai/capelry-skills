@@ -241,7 +241,7 @@ def main() -> int:
 
     print(f"Installed Capelry skill from {repository}@{ref}:{source_path} to {dest}")
     print("Next: reload or restart your agent. In Pi, run /reload then /skill:capelry.")
-    print(f"Try: python {dest / 'scripts' / 'capelry.py'} search skill")
+    print(f"Try: python3 {dest / 'scripts' / 'capelry.py'} search skill")
     return 0
 
 
