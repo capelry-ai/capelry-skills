@@ -236,6 +236,19 @@ def normalize_source_filter(value: str) -> str:
     return lower.removeprefix("https://").removeprefix("http://").strip("/")
 
 
+def source_filter_aliases(value: str) -> list[str]:
+    """Return normalized source forms accepted by --source.
+
+    In addition to GitHub owner/repo slugs, accept the documented
+    `github/<owner-or-repo>` shorthand used by agents to mean "from GitHub".
+    """
+    normalized = normalize_source_filter(value)
+    aliases = [normalized]
+    if normalized.startswith("github/"):
+        aliases.append(normalized.removeprefix("github/"))
+    return dedupe(aliases)
+
+
 def matches_type(capability: dict[str, Any], expected: str | None) -> bool:
     if not expected:
         return True
@@ -251,13 +264,12 @@ def matches_status(capability: dict[str, Any], expected: str | None) -> bool:
 def matches_source(capability: dict[str, Any], expected: str | None) -> bool:
     if not expected:
         return True
-    wanted = normalize_source_filter(expected)
-    candidates = [
-        source_repository(capability),
-        source_slug(capability),
-        source_path(capability),
-    ]
-    return any(wanted in normalize_source_filter(candidate) for candidate in candidates if candidate)
+    wanted_aliases = source_filter_aliases(expected)
+    candidate_aliases: list[str] = []
+    for candidate in (source_repository(capability), source_slug(capability), source_path(capability)):
+        if candidate:
+            candidate_aliases.extend(source_filter_aliases(candidate))
+    return any(wanted in candidate for wanted in wanted_aliases for candidate in candidate_aliases)
 
 
 def filter_capabilities(capabilities: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
