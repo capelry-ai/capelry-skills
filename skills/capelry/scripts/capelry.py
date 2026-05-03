@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import urllib.parse
@@ -27,6 +28,62 @@ TARGET_ROOTS = {
     "pi-global": "~/.pi/agent/skills",
     "claude-global": "~/.claude/skills",
     "codex-global": "~/.codex/skills",
+}
+
+STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "for",
+    "in",
+    "into",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
+PRODUCTION_READINESS_QUERIES = (
+    "devops rollout",
+    "deployment preflight",
+    "hardening docker",
+    "container image hardening",
+    "rbac hardening",
+    "backup integrity",
+    "observability",
+    "SRE",
+    "incident response",
+    "preflight",
+    "rollout",
+    "hardening",
+    "production",
+    "readiness",
+)
+
+TERM_EXPANSIONS = {
+    "backup": ("backup integrity", "recovery", "ransomware backup"),
+    "container": ("container image hardening", "docker", "trivy"),
+    "containers": ("container image hardening", "docker", "trivy"),
+    "deploy": ("deployment", "preflight", "rollout"),
+    "deployment": ("preflight", "rollout", "release plan"),
+    "devops": ("rollout", "preflight", "SRE"),
+    "docker": ("hardening docker", "container image hardening", "docker bench security", "trivy"),
+    "hardening": ("container image hardening", "hardening docker", "rbac hardening", "kubernetes"),
+    "incident": ("incident response", "incident response playbook"),
+    "k8s": ("kubernetes", "rbac hardening", "platform sre kubernetes"),
+    "kubernetes": ("k8s", "rbac hardening", "platform sre kubernetes", "azure kubernetes readiness"),
+    "observability": ("monitoring", "SRE"),
+    "prod": PRODUCTION_READINESS_QUERIES,
+    "production": PRODUCTION_READINESS_QUERIES,
+    "readiness": PRODUCTION_READINESS_QUERIES,
+    "recovery": ("backup", "backup integrity", "incident response"),
+    "release": ("rollout", "deployment", "preflight"),
+    "rollout": ("devops rollout", "release plan", "deployment"),
+    "security": ("hardening", "trivy", "rbac hardening"),
+    "sre": ("SRE", "observability", "kubernetes", "incident response"),
 }
 
 
@@ -58,6 +115,10 @@ def fetch_json(url: str) -> Any:
     return json.loads(fetch_bytes(url).decode("utf-8"))
 
 
+def print_json(payload: Any) -> None:
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
 def parse_ref(value: str) -> tuple[str, str, str | None]:
     ref, _, version = value.partition("@")
     if "/" not in ref:
@@ -66,6 +127,51 @@ def parse_ref(value: str) -> tuple[str, str, str | None]:
     if not namespace or not name:
         raise SystemExit("Capability ref must be namespace/name")
     return namespace, name, version or None
+
+
+def capability_ref(capability: dict[str, Any]) -> str:
+    return f"{capability.get('namespace')}/{capability.get('name')}"
+
+
+def capability_version(capability: dict[str, Any]) -> str:
+    latest = capability.get("latestVersion") or {}
+    version = latest.get("version")
+    return version if isinstance(version, str) and version else "?"
+
+
+def capability_status(capability: dict[str, Any]) -> str:
+    latest = capability.get("latestVersion") or {}
+    status = latest.get("validationStatus")
+    return status if isinstance(status, str) and status else "?"
+
+
+def capability_type(capability: dict[str, Any]) -> str:
+    package_type = capability.get("packageType")
+    return package_type if isinstance(package_type, str) and package_type else "capability"
+
+
+def source_repository(capability: dict[str, Any]) -> str:
+    source = capability.get("source") or {}
+    repository = source.get("repository")
+    return repository if isinstance(repository, str) else ""
+
+
+def source_path(capability: dict[str, Any]) -> str:
+    source = capability.get("source") or {}
+    path = source.get("path")
+    return path if isinstance(path, str) else ""
+
+
+def github_slug_from_repository(repository: str) -> str:
+    match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$", repository)
+    if not match:
+        return ""
+    return f"{match.group('owner')}/{match.group('repo')}"
+
+
+def source_slug(capability: dict[str, Any]) -> str:
+    repository = source_repository(capability)
+    return github_slug_from_repository(repository) or repository
 
 
 def capability_detail(base: str, ref: str) -> dict[str, Any]:
@@ -81,22 +187,225 @@ def latest_version(capability: dict[str, Any]) -> str:
     return version
 
 
+def search_capabilities(base: str, query: str) -> list[dict[str, Any]]:
+    encoded = urllib.parse.urlencode({"q": query})
+    payload = fetch_json(api_url(base, f"/api/capabilities?{encoded}"))
+    capabilities = payload.get("capabilities", [])
+    return capabilities if isinstance(capabilities, list) else []
+
+
+def tokenize(value: str) -> list[str]:
+    return [token for token in re.findall(r"[a-z0-9]+", value.lower()) if token not in STOP_WORDS]
+
+
+def dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        normalized = re.sub(r"\s+", " ", value.strip())
+        key = normalized.lower()
+        if normalized and key not in seen:
+            seen.add(key)
+            result.append(normalized)
+    return result
+
+
+def expanded_queries(query: str) -> list[str]:
+    """Return a bounded set of related search queries for agent discovery."""
+    seeds = [query]
+    tokens = tokenize(query)
+    lower = query.lower()
+
+    if "production readiness" in lower or {"production", "readiness"}.issubset(set(tokens)):
+        seeds.extend(PRODUCTION_READINESS_QUERIES)
+
+    for token in tokens:
+        seeds.extend(TERM_EXPANSIONS.get(token, ()))
+        if len(token) > 2:
+            seeds.append(token)
+
+    # Keep network use predictable while still covering common adjacent terms.
+    return dedupe(seeds)[:16]
+
+
+def normalize_source_filter(value: str) -> str:
+    lower = value.strip().lower().removesuffix(".git").strip("/")
+    match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+)", lower)
+    if match:
+        return f"{match.group('owner')}/{match.group('repo')}"
+    return lower.removeprefix("https://").removeprefix("http://").strip("/")
+
+
+def matches_type(capability: dict[str, Any], expected: str | None) -> bool:
+    if not expected:
+        return True
+    return capability_type(capability).lower() == expected.lower()
+
+
+def matches_status(capability: dict[str, Any], expected: str | None) -> bool:
+    if not expected:
+        return True
+    return capability_status(capability).lower() == expected.lower()
+
+
+def matches_source(capability: dict[str, Any], expected: str | None) -> bool:
+    if not expected:
+        return True
+    wanted = normalize_source_filter(expected)
+    candidates = [
+        source_repository(capability),
+        source_slug(capability),
+        source_path(capability),
+    ]
+    return any(wanted in normalize_source_filter(candidate) for candidate in candidates if candidate)
+
+
+def filter_capabilities(capabilities: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    package_type = getattr(args, "package_type", None)
+    status = getattr(args, "status", None)
+    source = getattr(args, "source", None)
+    return [
+        capability
+        for capability in capabilities
+        if matches_type(capability, package_type)
+        and matches_status(capability, status)
+        and matches_source(capability, source)
+    ]
+
+
+def text_for_relevance(capability: dict[str, Any]) -> str:
+    fields = [
+        capability_ref(capability),
+        capability.get("summary") or "",
+        capability.get("description") or "",
+        source_repository(capability),
+        source_path(capability),
+    ]
+    return " ".join(str(field).lower() for field in fields if field)
+
+
+def relevance_reasons(capability: dict[str, Any], query: str, args: argparse.Namespace) -> str:
+    reasons: list[str] = []
+    text = text_for_relevance(capability)
+    matched_terms = [token for token in tokenize(query) if token in text]
+    if matched_terms:
+        reasons.append("matches " + ", ".join(dedupe(matched_terms)[:6]))
+
+    matched_queries = capability.get("_capelryMatchedQueries") or []
+    if isinstance(matched_queries, list) and matched_queries:
+        display_queries = [str(item) for item in matched_queries[:4]]
+        if display_queries != [query]:
+            reasons.append("found via " + ", ".join(display_queries))
+
+    if getattr(args, "package_type", None):
+        reasons.append(f"type={capability_type(capability)}")
+    if getattr(args, "status", None):
+        reasons.append(f"status={capability_status(capability)}")
+    if getattr(args, "source", None):
+        slug = source_slug(capability)
+        if slug:
+            reasons.append(f"source={slug}")
+
+    return "; ".join(reasons) if reasons else "returned by registry search"
+
+
+def script_invocation() -> str:
+    script = sys.argv[0] or "scripts/capelry.py"
+    return f"python3 {shlex.quote(script)}"
+
+
+def install_snippet(ref: str, target: str) -> str:
+    return f"{script_invocation()} install {shlex.quote(ref)} --target {shlex.quote(target)}"
+
+
+def capability_output(
+    capability: dict[str, Any],
+    base: str,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    output = {key: value for key, value in capability.items() if not key.startswith("_capelry")}
+    ref = capability_ref(capability)
+    output["ref"] = ref
+    output["version"] = capability_version(capability)
+    output["status"] = capability_status(capability)
+    output["type"] = capability_type(capability)
+    output["sourceSlug"] = source_slug(capability) or None
+    output["page"] = f"{base}/{ref}"
+
+    matched_queries = capability.get("_capelryMatchedQueries")
+    if matched_queries:
+        output["matchedQueries"] = matched_queries
+    install_target = getattr(args, "install_snippet", None)
+    if install_target:
+        output["installSnippet"] = install_snippet(ref, install_target)
+    if getattr(args, "explain_relevance", False):
+        output["relevance"] = relevance_reasons(capability, getattr(args, "query", ref), args)
+    return output
+
+
 def command_search(args: argparse.Namespace) -> None:
     base = registry_base(args)
-    query = urllib.parse.urlencode({"q": args.query})
-    payload = fetch_json(api_url(base, f"/api/capabilities?{query}"))
-    capabilities = payload.get("capabilities", [])
-    if not capabilities:
-        print("No capabilities found.")
+    queries = expanded_queries(args.query) if args.expand else [args.query]
+    capabilities_by_ref: dict[str, dict[str, Any]] = {}
+
+    for query in queries:
+        for item in search_capabilities(base, query):
+            ref = capability_ref(item)
+            if ref == "None/None":
+                continue
+            if ref not in capabilities_by_ref:
+                copy = dict(item)
+                copy["_capelryMatchedQueries"] = []
+                capabilities_by_ref[ref] = copy
+            capabilities_by_ref[ref]["_capelryMatchedQueries"].append(query)
+
+    capabilities = list(capabilities_by_ref.values())
+    filtered = filter_capabilities(capabilities, args)
+    limited = filtered[: args.limit]
+
+    if args.json_output:
+        print_json(
+            {
+                "registry": base,
+                "query": args.query,
+                "queries": queries,
+                "filters": {
+                    "type": args.package_type,
+                    "status": args.status,
+                    "source": args.source,
+                },
+                "count": len(filtered),
+                "limit": args.limit,
+                "suggestedQueries": expanded_queries(args.query)[1:],
+                "capabilities": [capability_output(item, base, args) for item in limited],
+            }
+        )
         return
 
-    for item in capabilities[: args.limit]:
-        latest = item.get("latestVersion") or {}
-        ref = f"{item.get('namespace')}/{item.get('name')}"
-        version = latest.get("version", "?")
-        package_type = item.get("packageType", "capability")
+    if not filtered:
+        print("No capabilities found.")
+        suggestions = expanded_queries(args.query)[1:7]
+        if suggestions and not args.expand:
+            print("Try --expand or related queries: " + ", ".join(suggestions))
+        return
+
+    show_metadata = args.explain_relevance or args.install_snippet or args.package_type or args.status or args.source
+    for item in limited:
+        ref = capability_ref(item)
+        version = capability_version(item)
+        package_type = capability_type(item)
         summary = item.get("summary") or item.get("description") or ""
         print(f"{ref}@{version} [{package_type}] {summary}")
+        if show_metadata:
+            metadata = [f"status={capability_status(item)}"]
+            slug = source_slug(item)
+            if slug:
+                metadata.append(f"source={slug}")
+            print("  " + " ".join(metadata))
+        if args.explain_relevance:
+            print(f"  relevance: {relevance_reasons(item, args.query, args)}")
+        if args.install_snippet:
+            print(f"  install: {install_snippet(ref, args.install_snippet)}")
 
 
 def command_info(args: argparse.Namespace) -> None:
@@ -104,8 +413,13 @@ def command_info(args: argparse.Namespace) -> None:
     capability = capability_detail(base, args.ref)
     latest = capability.get("latestVersion") or {}
     source = capability.get("source") or {}
+    ref = capability_ref(capability)
 
-    print(f"{capability['namespace']}/{capability['name']}@{latest.get('version', '?')}")
+    if args.json_output:
+        print_json({"registry": base, "capability": capability_output(capability, base, args)})
+        return
+
+    print(f"{ref}@{latest.get('version', '?')}")
     print(f"type: {capability.get('packageType', 'capability')}")
     print(f"status: {latest.get('validationStatus', '?')}")
     if capability.get("summary"):
@@ -119,6 +433,8 @@ def command_info(args: argparse.Namespace) -> None:
     print(f"page: {base}/{capability['namespace']}/{capability['name']}")
     if latest.get("checksumSha256"):
         print(f"checksum: {latest['checksumSha256']}")
+    if args.install_snippet:
+        print(f"install: {install_snippet(ref, args.install_snippet)}")
 
 
 def safe_zip_members(zf: zipfile.ZipFile):
@@ -230,9 +546,9 @@ def download_github_path(
 def install_from_github_source(capability: dict[str, Any], dest: Path, force: bool) -> bool:
     source = capability.get("source") or {}
     repository = source.get("repository")
-    source_path = source.get("path")
+    source_path_value = source.get("path")
     branch = source.get("defaultBranch") or "main"
-    if not isinstance(repository, str) or not isinstance(source_path, str):
+    if not isinstance(repository, str) or not isinstance(source_path_value, str):
         return False
     parts = github_parts(repository)
     if parts is None:
@@ -240,7 +556,7 @@ def install_from_github_source(capability: dict[str, Any], dest: Path, force: bo
 
     owner, repo = parts
     prepare_dest(dest, force)
-    download_github_path(owner, repo, source_path, branch, dest)
+    download_github_path(owner, repo, source_path_value, branch, dest)
     if not (dest / "SKILL.md").exists():
         shutil.rmtree(dest, ignore_errors=True)
         raise SystemExit("GitHub source fallback completed but did not produce SKILL.md")
@@ -272,7 +588,8 @@ def command_install(args: argparse.Namespace) -> None:
     dest = resolve_install_dest(args, name)
 
     archive_url = api_url(base, f"/api/capabilities/{namespace}/{name}/versions/{version}/download")
-    print(f"Downloading {namespace}/{name}@{version} from {base}...")
+    if not args.json_output:
+        print(f"Downloading {namespace}/{name}@{version} from {base}...")
     archive = fetch_bytes(archive_url)
 
     if extract_skill_archive(archive, dest, args.force):
@@ -283,23 +600,68 @@ def command_install(args: argparse.Namespace) -> None:
         raise SystemExit("Package did not contain SKILL.md and no supported source fallback was available")
 
     skill_name = installed_skill_name(dest)
+    if args.json_output:
+        print_json(
+            {
+                "registry": base,
+                "ref": f"{namespace}/{name}",
+                "version": version,
+                "destination": str(dest),
+                "installedFrom": installed_from,
+                "skillName": skill_name,
+                "next": f"reload or restart your agent; in Pi run /reload and then /skill:{skill_name}",
+            }
+        )
+        return
+
     print(f"Installed {namespace}/{name}@{version} to {dest}")
     print(f"source: {installed_from}")
     print("Next: reload or restart your agent. In Pi, run /reload and then /skill:" + skill_name)
 
 
+def add_json_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Emit machine-readable JSON output",
+    )
+
+
+def add_install_snippet_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--install-snippet",
+        nargs="?",
+        const="agents-project",
+        choices=sorted(TARGET_ROOTS),
+        help="Include a python3 install command for the given target, e.g. pi-project",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Search and install skills from Capelry")
+    parser = argparse.ArgumentParser(description="Search, inspect, and install capabilities from Capelry")
     parser.add_argument("--registry", help=f"Registry base URL (default: {DEFAULT_REGISTRY} or CAPELRY_REGISTRY_URL)")
+    parser.add_argument("--json", dest="json_output", action="store_true", help="Emit machine-readable JSON output")
+    parser.set_defaults(json_output=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     search = subparsers.add_parser("search", help="Search capabilities")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=20)
+    search.add_argument("--expand", action="store_true", help="Search related terms when an exact phrase is too narrow")
+    search.add_argument("--type", dest="package_type", help="Filter by package type, e.g. skill, agent, prompt")
+    search.add_argument("--status", help="Filter by latest validation status, e.g. passed")
+    search.add_argument("--source", help="Filter by source repository, e.g. github/awesome-copilot")
+    add_install_snippet_argument(search)
+    search.add_argument("--explain-relevance", action="store_true", help="Explain why each result may be relevant")
+    add_json_argument(search)
     search.set_defaults(func=command_search)
 
     info = subparsers.add_parser("info", help="Show capability details")
     info.add_argument("ref", help="namespace/name")
+    add_install_snippet_argument(info)
+    add_json_argument(info)
     info.set_defaults(func=command_info)
 
     install = subparsers.add_parser("install", help="Install a skill capability")
@@ -309,6 +671,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--dest", help="Exact destination directory")
     install.add_argument("--name", help="Install directory name override")
     install.add_argument("--force", action="store_true", help="Replace an existing destination")
+    add_json_argument(install)
     install.set_defaults(func=command_install)
 
     return parser

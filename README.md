@@ -167,18 +167,28 @@ Read .agents/skills/capelry/SKILL.md before searching for external capabilities.
 
 ### Direct CLI
 
-You can always run the bundled CLI directly from the installed skill:
-
-```text
-python .agents/skills/capelry/scripts/capelry.py search "skill creator"
-python .agents/skills/capelry/scripts/capelry.py info openai/skill-creator
-python .agents/skills/capelry/scripts/capelry.py install openai/skill-creator --target agents-project
-```
+You can always run the bundled CLI directly from the installed skill. Examples use `python3`; substitute `py` on Windows or `python` if that is your Python 3 launcher.
 
 For Pi project-local installs:
 
 ```text
-python .agents/skills/capelry/scripts/capelry.py install openai/skill-creator --target pi-project
+python3 .pi/skills/capelry/scripts/capelry.py search "skill creator" --type skill --status passed
+python3 .pi/skills/capelry/scripts/capelry.py info openai/skill-creator --install-snippet pi-project
+python3 .pi/skills/capelry/scripts/capelry.py install openai/skill-creator --target pi-project
+```
+
+For portable Agent Skills installs:
+
+```text
+python3 .agents/skills/capelry/scripts/capelry.py search "skill creator" --type skill --status passed
+python3 .agents/skills/capelry/scripts/capelry.py info openai/skill-creator --install-snippet agents-project
+python3 .agents/skills/capelry/scripts/capelry.py install openai/skill-creator --target agents-project
+```
+
+Agent-friendly discovery output is available with filters and JSON:
+
+```text
+python3 .pi/skills/capelry/scripts/capelry.py search "production readiness" --expand --type skill --status passed --source github/awesome-copilot --install-snippet pi-project --explain-relevance --json
 ```
 
 ## Registry URL
@@ -241,7 +251,7 @@ Read https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/SKILL.
 
 ## Browse safely
 
-Skills are executable instructions. Before running third-party scripts, ask your agent to inspect the installed `SKILL.md` and any bundled scripts. Prefer project-local installs while exploring. You can review the source skill instructions at [https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/SKILL.md](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/SKILL.md).
+Skills are executable instructions. Prefer the workflow: search → info → compare → install. Before running third-party scripts, ask your agent to inspect the `SKILL.md` and any bundled scripts. Prefer project-local installs while exploring. You can review the source skill instructions at [https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/SKILL.md](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/SKILL.md).
 
 ---
 
