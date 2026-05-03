@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_REGISTRY = "https://capelry.com"
+API_SEARCH_LIMIT_MIN = 1
+API_SEARCH_LIMIT_MAX = 100
 
 TARGET_ROOTS = {
     "agents-project": ".agents/skills",
@@ -227,6 +229,16 @@ def latest_version(capability: dict[str, Any]) -> str:
     return version
 
 
+def clamp_api_search_limit(value: int | None) -> int | None:
+    if value is None:
+        return None
+    return min(max(value, API_SEARCH_LIMIT_MIN), API_SEARCH_LIMIT_MAX)
+
+
+def result_limit(value: int) -> int:
+    return max(value, API_SEARCH_LIMIT_MIN)
+
+
 def search_capabilities(
     base: str,
     query: str,
@@ -249,8 +261,9 @@ def search_capabilities(
         params["phase"] = phase
     if source:
         params["source"] = source
-    if limit:
-        params["limit"] = str(limit)
+    clamped_limit = clamp_api_search_limit(limit)
+    if clamped_limit is not None:
+        params["limit"] = str(clamped_limit)
     encoded = urllib.parse.urlencode(params)
     payload = fetch_json(api_url(base, f"/api/capabilities?{encoded}"))
     capabilities = payload.get("capabilities", [])
@@ -516,8 +529,10 @@ def collect_search_results(base: str, args: argparse.Namespace, queries: list[st
 def command_search(args: argparse.Namespace) -> None:
     base = registry_base(args)
     queries = expanded_queries(args.query) if args.expand else [args.query]
-    filtered = collect_search_results(base, args, queries, per_query_limit=max(args.limit, 25))
-    limited = filtered[: args.limit]
+    display_limit = result_limit(args.limit)
+    api_limit = clamp_api_search_limit(max(display_limit, 25))
+    filtered = collect_search_results(base, args, queries, per_query_limit=api_limit)
+    limited = filtered[:display_limit]
 
     if args.json_output:
         print_json(
@@ -533,7 +548,7 @@ def command_search(args: argparse.Namespace) -> None:
                     "phase": args.phase,
                 },
                 "count": len(filtered),
-                "limit": args.limit,
+                "limit": display_limit,
                 "suggestedQueries": expanded_queries(args.query)[1:],
                 "capabilities": [capability_output(item, base, args) for item in limited],
             }
@@ -632,7 +647,8 @@ def command_discover(args: argparse.Namespace) -> None:
     base = registry_base(args)
     queries = discover_queries(args.query, args.extra_query, expand=not args.no_expand)
     top = min(max(args.top, 1), 25)
-    filtered = collect_search_results(base, args, queries, per_query_limit=max(args.search_limit, top, 25))
+    api_limit = clamp_api_search_limit(max(args.search_limit, top, 25))
+    filtered = collect_search_results(base, args, queries, per_query_limit=api_limit)
     refs = [capability_ref(item) for item in filtered[:top]]
 
     payload: dict[str, Any] = {"capabilities": [], "errors": [], "meta": {"requested": 0, "returned": 0, "limit": 25}}
