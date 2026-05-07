@@ -46,12 +46,14 @@ To verify the install, run `scripts/capelry.py` from the installed skill directo
 
 ```text
 python3 .agents/skills/capelry/scripts/capelry.py search skill
+python3 .agents/skills/capelry/scripts/capelry.py version
 ```
 
 For a Pi project target:
 
 ```text
 python3 .pi/skills/capelry/scripts/capelry.py search skill
+python3 .pi/skills/capelry/scripts/capelry.py version
 ```
 
 After install, reload or restart your agent. In Pi, run:
@@ -86,6 +88,7 @@ Useful options:
 
 ```text
 python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref main --target agents-project
+python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref v1.1.0 --target agents-project  # example published release tag
 python3 scripts/bootstrap.py --target pi-project
 python3 scripts/bootstrap.py --target claude-project
 python3 scripts/bootstrap.py --target codex-project
@@ -109,6 +112,8 @@ The bootstrap script reads these optional variables:
 | `CAPELRY_SKILLS_DIR`           | `.agents/skills`                     | Parent skills directory when no target is set |
 
 The installed Capelry CLI reads `CAPELRY_REGISTRY_URL` when you want registry operations to use a private, staging, or self-hosted Capelry registry. By default, registry operations use `https://capelry.com`.
+
+For Capelry self-update checks from GitHub, the installed CLI also reads `CAPELRY_GITHUB_TOKEN` or `GITHUB_TOKEN` when you need higher API rate limits or private-repository access.
 
 Bash/zsh examples:
 
@@ -179,6 +184,19 @@ For Pi-only development in this repository, you can copy to `.pi/skills/capelry`
 ## Use after bootstrap
 
 Run the CLI from the installed skill directory. Replace `<capelry-skill-dir>` with the path you selected, such as `.agents/skills/capelry`, `.pi/skills/capelry`, or `.claude/skills/capelry`.
+
+Check the installed Capelry skill version and latest GitHub `vX.X.X` release/tag:
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py version
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --dry-run
+```
+
+Update the Capelry skill itself after user approval:
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --yes
+```
 
 Search Capelry:
 

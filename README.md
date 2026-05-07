@@ -22,7 +22,7 @@
 
 Your coding assistant is more useful when it can discover and install the right capabilities on demand. **Capelry is an agentic skill registry**: a place for AI agents to find reusable skills, prompts, commands, workflows, agents, hooks, rules, extensions, and collections.
 
-This repository contains the **Capelry registry skill**: a portable Agent Skill that teaches your AI coding assistant how to use the Capelry registry. Point your agent at the bootstrap prompt, and it can install the skill into your project, search the registry, inspect capabilities, and add useful skills for the task at hand.
+This repository contains the **Capelry registry skill**: a portable Agent Skill that teaches your AI coding assistant how to use the Capelry registry. Point your agent at the bootstrap prompt, and it can install the skill into your project, search the registry, inspect capabilities, add useful skills for the task at hand, and keep itself current from GitHub releases.
 
 > Capelry.com is the public registry experience for discovering and sharing agent capabilities: **[https://capelry.com](https://capelry.com)**.
 
@@ -39,6 +39,8 @@ This repository contains the **Capelry registry skill**: a portable Agent Skill 
   - [GitHub Copilot](https://github.com/capelry-ai/capelry-skills#github-copilot)
   - [Cline and Roo Code](https://github.com/capelry-ai/capelry-skills#cline-and-roo-code)
   - [Direct CLI](https://github.com/capelry-ai/capelry-skills#direct-cli)
+- [Version and self-update](https://github.com/capelry-ai/capelry-skills#version-and-self-update)
+- [Release versioning](https://github.com/capelry-ai/capelry-skills#release-versioning)
 - [Registry URL](https://github.com/capelry-ai/capelry-skills#registry-url)
 - [Repository tour](https://github.com/capelry-ai/capelry-skills#repository-tour)
 - [Install targets](https://github.com/capelry-ai/capelry-skills#install-targets)
@@ -74,6 +76,7 @@ Once installed, the Capelry skill helps your agent:
 | 🧭 Discover | Batch related searches and bulk-inspect top refs into an actionable shortlist. |
 | 📖 Inspect | Read metadata, versions, source info, and checksums before installing. |
 | 📦 Install | Add skills into project-local or global skill directories. |
+| ⬆️ Self-update | Check the installed Capelry skill version and replace it from the latest GitHub `vX.X.X` release/tag. |
 | 🛠️ Package and publish | Prepare capability archives for the registry. |
 
 In short: describe the job, and Capelry helps your agent find the right capability without wandering the tooling swamp. 🌿
@@ -194,6 +197,40 @@ Agent-friendly discovery output is available with filters and JSON. `discover` b
 python3 .pi/skills/capelry/scripts/capelry.py discover "production readiness" --top 5 --install-snippet pi-project --json
 ```
 
+Check and update the installed Capelry skill itself:
+
+```text
+python3 .pi/skills/capelry/scripts/capelry.py version
+python3 .pi/skills/capelry/scripts/capelry.py self-update --dry-run
+python3 .pi/skills/capelry/scripts/capelry.py self-update --yes
+```
+
+## Version and self-update
+
+Yes: the Capelry skill can check its own installed version and update itself from GitHub. The bundled CLI compares the local installed `capability.yaml` version with the highest stable `vX.X.X` release/tag in `capelry-ai/capelry-skills`, then downloads `skills/capelry` from that ref.
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py version
+python3 <capelry-skill-dir>/scripts/capelry.py version --check
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --dry-run
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --yes
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref v1.1.0 --yes
+```
+
+Self-update is opt-in and filesystem-writing: it prompts in interactive terminals and requires `--yes` for non-interactive runs. It is intended for installed skill copies; use `git` to update this source checkout unless you explicitly pass `--allow-source-checkout`. Existing pre-1.1.0 installs need one manual re-bootstrap/reinstall to get the `self-update` command. Reload or restart your agent afterward. If GitHub API rate limits are hit, set `CAPELRY_GITHUB_TOKEN` or `GITHUB_TOKEN`.
+
+## Release versioning
+
+Release GitHub tags and releases as stable `vX.X.X` refs, for example `v1.1.0`. Keep `skills/capelry/capability.yaml` at the matching registry package version without the `v` prefix, for example `1.1.0`.
+
+Recommended release flow:
+
+1. Bump `skills/capelry/capability.yaml` and docs/package examples to the new `X.X.X` version.
+2. Validate the CLI: `python3 -m py_compile skills/capelry/scripts/capelry.py` and `python3 skills/capelry/scripts/capelry.py version --ref vX.X.X` after the tag exists.
+3. Package from `skills/capelry`: `python3 -m zipfile -c capelry-X.X.X.zip capability.yaml SKILL.md BOOTSTRAP.md agents scripts`.
+4. Commit, tag, and push: `git tag -a vX.X.X -m "vX.X.X" && git push origin main vX.X.X`.
+5. Create the GitHub release for `vX.X.X`, then smoke-test a 1.1.0+ install with `self-update --ref vX.X.X --yes`. For the first self-update release, pre-1.1.0 installs must be re-bootstrapped once.
+
 ## Registry URL
 
 The Capelry registry home is:
@@ -229,7 +266,7 @@ Useful links:
 | [`skills/capelry/capability.yaml`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/capability.yaml) | Capelry package manifest. |
 | [`skills/capelry/agents/openai.yaml`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/agents/openai.yaml) | UI/display metadata. |
 | [`skills/capelry/scripts/bootstrap.py`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/scripts/bootstrap.py) | OS-neutral GitHub-source bootstrap installer. |
-| [`skills/capelry/scripts/capelry.py`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/scripts/capelry.py) | Small stdlib-only registry CLI. |
+| [`skills/capelry/scripts/capelry.py`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/scripts/capelry.py) | Small stdlib-only registry and self-update CLI. |
 
 ## Install targets
 
