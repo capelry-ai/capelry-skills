@@ -1,6 +1,6 @@
 ---
 name: capelry
-description: Integrate with the Capelry capability registry to search, inspect, compare, install, bootstrap, package, and publish AI-agent skills and adjacent capabilities. Use when a user asks to find or install a skill from Capelry, add Capelry support to a fresh project, publish a capability package, or work on the Capelry registry codebase.
+description: Integrate with the Capelry capability registry to search, inspect, compare, install, bootstrap, package, publish, and self-update AI-agent skills and adjacent capabilities. Use when a user asks to find or install a skill from Capelry, add Capelry support to a fresh project, update the Capelry skill, publish a capability package, or work on the Capelry registry codebase.
 license: MIT
 metadata:
   registry: "https://capelry.com"
@@ -18,6 +18,27 @@ Set `CAPELRY_REGISTRY_URL` to use a private, staging, or self-hosted Capelry reg
 ## Python launcher
 
 Examples use `python3`, which is the safest default in Linux, macOS, and Pi environments. If a copied example uses `python` and that command is unavailable, retry with `python3`. If `python3` is unavailable, substitute the launcher that exists in the target environment, such as `py` on Windows or `python` where it points to Python 3.9+.
+
+## Capelry Skill Version and Self-Update
+
+When the user asks whether Capelry itself is current, run the installed CLI from this skill directory:
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py version
+python3 <capelry-skill-dir>/scripts/capelry.py version --check
+```
+
+`version` compares the local `capability.yaml` version with the highest stable GitHub `vX.X.X` release/tag from `capelry-ai/capelry-skills`. `--check` exits with code 1 when an update is available.
+
+When the user asks to update Capelry itself, inspect first, then update only with user approval:
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --dry-run
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --yes
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref v1.1.0 --yes
+```
+
+Self-update replaces the installed Capelry skill directory from GitHub source path `skills/capelry`. It is not a background update; use `--yes` for non-interactive runs, and reload/restart the agent afterward. Existing pre-1.1.0 installs need one manual re-bootstrap/reinstall to get the `self-update` command. Use `git` rather than self-update inside the `capelry-skills` source checkout unless the user explicitly asks to pass `--allow-source-checkout`. If GitHub API rate limits are hit, set `CAPELRY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`.
 
 ## Fast Path: Search → Info → Compare → Install
 
@@ -215,7 +236,7 @@ Use `SKILL.md` as the manifest `spec.docs.readme` when you do not need a human R
 Create a zip from inside the skill directory:
 
 ```text
-python3 -m zipfile -c capelry-0.1.0.zip capability.yaml SKILL.md BOOTSTRAP.md agents scripts
+python3 -m zipfile -c capelry-1.1.0.zip capability.yaml SKILL.md BOOTSTRAP.md agents scripts
 # Add references/ or assets/ only if those directories exist.
 ```
 
@@ -228,3 +249,4 @@ Publish through the Capelry UI or API. Direct API publishing requires an authent
 - Prefer project-local installs for experiments.
 - Do not run bundled scripts from newly installed skills unless the user asks or the skill documentation clearly requires it.
 - Preserve exact version and checksum details when the user needs reproducibility.
+- Do not self-update Capelry in the background; update only when the user asks or approves it.

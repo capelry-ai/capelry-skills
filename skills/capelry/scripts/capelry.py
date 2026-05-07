@@ -11,6 +11,8 @@ import re
 import shlex
 import shutil
 import sys
+import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,6 +21,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 DEFAULT_REGISTRY = "https://capelry.com"
+SELF_GITHUB_REPOSITORY = "capelry-ai/capelry-skills"
+SELF_SOURCE_PATH = "skills/capelry"
+SELF_DEFAULT_REF = "main"
 API_SEARCH_LIMIT_MIN = 1
 API_SEARCH_LIMIT_MAX = 100
 
@@ -120,11 +125,16 @@ def api_url(base: str, path: str) -> str:
     return f"{base}{path if path.startswith('/') else '/' + path}"
 
 
-def http_headers(url: str, *, user_agent: str = "capelry-skill/0.1") -> dict[str, str]:
+def http_headers(url: str, *, user_agent: str = "capelry-skill/1.1.0") -> dict[str, str]:
     headers = {"User-Agent": user_agent}
     parsed = urllib.parse.urlparse(url)
     if parsed.netloc.lower() == "api.github.com":
-        token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+        token = (
+            os.environ.get("CAPELRY_GITHUB_TOKEN")
+            or os.environ.get("GITHUB_TOKEN")
+            or os.environ.get("GH_TOKEN")
+            or ""
+        ).strip()
         if token:
             headers["Authorization"] = f"Bearer {token}"
     return headers
@@ -146,13 +156,54 @@ def fetch_json(url: str) -> Any:
     return json.loads(fetch_bytes(url).decode("utf-8"))
 
 
+def github_headers(accept: str | None = "application/vnd.github+json") -> dict[str, str]:
+    headers = {"User-Agent": "capelry-skill/self-update"}
+    if accept:
+        headers["Accept"] = accept
+    token = (
+        os.environ.get("CAPELRY_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("GH_TOKEN")
+        or ""
+    ).strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def fetch_github_json(url: str, *, allow_404: bool = False) -> Any:
+    request = urllib.request.Request(url, headers=github_headers())
+    try:
+        with urllib.request.urlopen(request) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        if allow_404 and error.code == 404:
+            return None
+        body = error.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"HTTP {error.code} for {url}\n{body}") from error
+    except urllib.error.URLError as error:
+        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
+
+
+def fetch_github_bytes(url: str) -> bytes:
+    request = urllib.request.Request(url, headers=github_headers("application/octet-stream"))
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"HTTP {error.code} for {url}\n{body}") from error
+    except urllib.error.URLError as error:
+        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
+
+
 def post_json(url: str, payload: dict[str, Any]) -> Any:
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=body,
         headers={
-            "User-Agent": "capelry-skill/0.1",
+            "User-Agent": "capelry-skill/1.1.0",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
@@ -825,6 +876,19 @@ def download_github_archive_path(owner: str, repo: str, path: str, ref: str, des
         raise SystemExit("GitHub archive fallback completed but did not produce SKILL.md")
 
 
+def github_archive_file_bytes(owner: str, repo: str, path: str, ref: str) -> bytes:
+    source_path_value = normalize_github_source_path(path)
+    if not source_path_value:
+        raise SystemExit("GitHub archive file path cannot be repository root")
+    archive = fetch_bytes(github_archive_url(owner, repo, ref))
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        rel_members = github_archive_rel_members(zf)
+        member = rel_members.get(source_path_value)
+        if member is None:
+            raise SystemExit(f"GitHub archive did not contain file: {source_path_value}")
+        return zf.read(member)
+
+
 def github_api_url(owner: str, repo: str, path: str, ref: str) -> str:
     quoted_path = urllib.parse.quote(path.strip("/"))
     return f"https://api.github.com/repos/{owner}/{repo}/contents/{quoted_path}?ref={urllib.parse.quote(ref)}"
@@ -848,13 +912,13 @@ def download_github_path(
     root_path: str | None = None,
 ) -> None:
     root_path = root_path or path.rstrip("/")
-    payload = fetch_json(github_api_url(owner, repo, path, ref))
+    payload = fetch_github_json(github_api_url(owner, repo, path, ref))
     if isinstance(payload, dict):
         if payload.get("type") != "file":
             raise SystemExit(f"Unsupported GitHub content type at {path}: {payload.get('type')}")
         target = dest / source_relative_path(path, root_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(fetch_bytes(payload["download_url"]))
+        target.write_bytes(fetch_github_bytes(payload["download_url"]))
         return
 
     if not isinstance(payload, list):
@@ -869,7 +933,7 @@ def download_github_path(
         if entry_type == "file":
             out = dest / rel
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(fetch_bytes(entry["download_url"]))
+            out.write_bytes(fetch_github_bytes(entry["download_url"]))
         elif entry_type == "dir":
             download_github_path(owner, repo, entry_path, ref, dest, root_path)
 
@@ -965,6 +1029,324 @@ def command_install(args: argparse.Namespace) -> None:
     print("Next: reload or restart your agent. In Pi, run /reload and then /skill:" + skill_name)
 
 
+def strip_yaml_scalar(value: str) -> str:
+    value = value.strip()
+    if " #" in value:
+        value = value.split(" #", 1)[0].strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def yaml_section_value(text: str, section: str, key: str) -> str | None:
+    in_section = False
+    section_pattern = re.compile(rf"^{re.escape(section)}:\s*$")
+    key_pattern = re.compile(rf"^\s+{re.escape(key)}:\s*(?P<value>.*?)\s*$")
+
+    for line in text.splitlines():
+        if section_pattern.match(line):
+            in_section = True
+            continue
+        if in_section:
+            if line and not line.startswith((" ", "\t")):
+                break
+            match = key_pattern.match(line)
+            if match:
+                return strip_yaml_scalar(match.group("value"))
+    return None
+
+
+def self_skill_dir() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def self_manifest_text(skill_dir: Path) -> str:
+    manifest = skill_dir / "capability.yaml"
+    try:
+        return manifest.read_text(encoding="utf-8")
+    except OSError as error:
+        raise SystemExit(f"Unable to read {manifest}: {error}") from error
+
+
+def self_manifest_value(skill_dir: Path, section: str, key: str) -> str | None:
+    return yaml_section_value(self_manifest_text(skill_dir), section, key)
+
+
+def self_local_version(skill_dir: Path) -> str:
+    return self_manifest_value(skill_dir, "metadata", "version") or "unknown"
+
+
+def split_github_slug(slug: str) -> tuple[str, str]:
+    owner, _, repo = slug.partition("/")
+    if not owner or not repo:
+        raise SystemExit(f"Invalid GitHub repository slug: {slug}")
+    return owner, repo
+
+
+def semver_tuple(version: str) -> tuple[int, int, int] | None:
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$", version.strip())
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def is_self_release_tag(value: str) -> bool:
+    return bool(re.match(r"^v\d+\.\d+\.\d+$", value.strip()))
+
+
+def latest_self_ref() -> dict[str, str | None]:
+    """Return the highest stable vX.X.X GitHub release/tag for this skill."""
+    owner, repo = split_github_slug(SELF_GITHUB_REPOSITORY)
+    candidates: list[dict[str, str | None]] = []
+
+    releases = fetch_github_json(f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=50", allow_404=True)
+    if isinstance(releases, list):
+        for release in releases:
+            if not isinstance(release, dict) or release.get("draft") or release.get("prerelease"):
+                continue
+            tag = release.get("tag_name")
+            if isinstance(tag, str) and is_self_release_tag(tag):
+                candidates.append(
+                    {
+                        "ref": tag.strip(),
+                        "source": "github-release",
+                        "url": release.get("html_url") if isinstance(release.get("html_url"), str) else None,
+                    }
+                )
+
+    tags = fetch_github_json(f"https://api.github.com/repos/{owner}/{repo}/tags?per_page=100", allow_404=True)
+    if isinstance(tags, list):
+        known_refs = {candidate["ref"] for candidate in candidates}
+        for entry in tags:
+            tag = entry.get("name") if isinstance(entry, dict) else None
+            if isinstance(tag, str) and is_self_release_tag(tag) and tag.strip() not in known_refs:
+                candidates.append(
+                    {
+                        "ref": tag.strip(),
+                        "source": "github-tag",
+                        "url": f"https://github.com/{SELF_GITHUB_REPOSITORY}/releases/tag/{urllib.parse.quote(tag.strip())}",
+                    }
+                )
+
+    if candidates:
+        return max(candidates, key=lambda item: semver_tuple(str(item["ref"])) or (-1, -1, -1))
+
+    return {
+        "ref": SELF_DEFAULT_REF,
+        "source": "default-branch",
+        "url": f"https://github.com/{SELF_GITHUB_REPOSITORY}/tree/{SELF_DEFAULT_REF}",
+    }
+
+
+def remote_self_manifest(ref: str) -> str:
+    owner, repo = split_github_slug(SELF_GITHUB_REPOSITORY)
+    manifest_path = f"{SELF_SOURCE_PATH}/capability.yaml"
+    archive_error: BaseException | None = None
+    try:
+        return github_archive_file_bytes(owner, repo, manifest_path, ref).decode("utf-8")
+    except (SystemExit, zipfile.BadZipFile) as error:
+        archive_error = error
+
+    try:
+        payload = fetch_github_json(github_api_url(owner, repo, manifest_path, ref))
+        if not isinstance(payload, dict) or payload.get("type") != "file" or not isinstance(payload.get("download_url"), str):
+            raise SystemExit(f"Could not read capability.yaml from {SELF_GITHUB_REPOSITORY}@{ref}")
+        return fetch_github_bytes(payload["download_url"]).decode("utf-8")
+    except SystemExit as error:
+        raise SystemExit(f"{error}\n\nGitHub archive manifest fallback also failed:\n{archive_error}") from error
+
+
+def remote_self_version(ref: str) -> str:
+    version = yaml_section_value(remote_self_manifest(ref), "metadata", "version")
+    if not version:
+        raise SystemExit(f"Remote capability.yaml at {SELF_GITHUB_REPOSITORY}@{ref} did not declare metadata.version")
+    return version
+
+
+def version_status(local_version: str, remote_version: str) -> str:
+    if local_version == remote_version:
+        return "current"
+    local_semver = semver_tuple(local_version)
+    remote_semver = semver_tuple(remote_version)
+    if local_semver and remote_semver:
+        if local_semver < remote_semver:
+            return "update-available"
+        if local_semver > remote_semver:
+            return "local-newer"
+        return "current"
+    return "different"
+
+
+def self_update_info(ref_override: str | None = None) -> dict[str, Any]:
+    skill_dir = self_skill_dir()
+    latest = (
+        {
+            "ref": ref_override,
+            "source": "explicit-ref",
+            "url": f"https://github.com/{SELF_GITHUB_REPOSITORY}/tree/{urllib.parse.quote(ref_override)}",
+        }
+        if ref_override
+        else latest_self_ref()
+    )
+    ref = latest["ref"]
+    if not isinstance(ref, str) or not ref:
+        raise SystemExit("Unable to determine a GitHub ref for Capelry self-update")
+    local_version = self_local_version(skill_dir)
+    remote_version = remote_self_version(ref)
+    return {
+        "skillDir": str(skill_dir),
+        "repository": f"https://github.com/{SELF_GITHUB_REPOSITORY}",
+        "sourcePath": SELF_SOURCE_PATH,
+        "localVersion": local_version,
+        "remoteVersion": remote_version,
+        "remoteRef": ref,
+        "remoteRefSource": latest.get("source"),
+        "remoteUrl": latest.get("url"),
+        "status": version_status(local_version, remote_version),
+    }
+
+
+def print_self_update_info(info: dict[str, Any]) -> None:
+    print(f"Capelry skill version: {info['localVersion']}")
+    print(f"installed at: {info['skillDir']}")
+    print(f"latest GitHub ref: {info['remoteRef']} ({info['remoteRefSource']})")
+    print(f"latest skill version: {info['remoteVersion']}")
+    print(f"status: {info['status']}")
+    if info.get("remoteUrl"):
+        print(f"release: {info['remoteUrl']}")
+    if info["status"] == "update-available":
+        print(f"update: {script_invocation()} self-update --yes")
+
+
+def command_version(args: argparse.Namespace) -> None:
+    info = self_update_info(args.ref)
+    if args.json_output:
+        print_json(info)
+    else:
+        print_self_update_info(info)
+    if args.check and info["status"] == "update-available":
+        raise SystemExit(1)
+
+
+def confirm_self_update(args: argparse.Namespace, info: dict[str, Any]) -> None:
+    if args.yes or args.dry_run:
+        return
+    if not sys.stdin.isatty():
+        raise SystemExit("Refusing non-interactive self-update without --yes")
+    answer = input(
+        f"Replace {info['skillDir']} with Capelry {info['remoteVersion']} from {info['remoteRef']}? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        raise SystemExit("Self-update cancelled")
+
+
+def validate_downloaded_self_skill(dest: Path) -> None:
+    required = ["SKILL.md", "capability.yaml", "scripts/capelry.py", "scripts/bootstrap.py"]
+    missing = [item for item in required if not (dest / item).exists()]
+    if missing:
+        raise SystemExit("Downloaded Capelry skill is incomplete; missing: " + ", ".join(missing))
+
+
+def remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def backup_path_for(dest: Path) -> Path:
+    stamp = int(time.time())
+    candidate = dest.parent / f".{dest.name}.backup-{stamp}"
+    index = 1
+    while candidate.exists():
+        candidate = dest.parent / f".{dest.name}.backup-{stamp}-{index}"
+        index += 1
+    return candidate
+
+
+def replace_skill_dir(dest: Path, new_dir: Path, *, keep_backup: bool) -> Path | None:
+    backup: Path | None = None
+    if dest.exists():
+        backup = backup_path_for(dest)
+        dest.rename(backup)
+    try:
+        shutil.move(str(new_dir), str(dest))
+    except Exception:
+        if dest.exists():
+            remove_path(dest)
+        if backup and backup.exists():
+            backup.rename(dest)
+        raise
+    if backup and backup.exists() and not keep_backup:
+        shutil.rmtree(backup)
+        return None
+    return backup
+
+
+def source_checkout_root(skill_dir: Path) -> Path | None:
+    for parent in skill_dir.parents:
+        if (parent / ".git").exists() and (parent / SELF_SOURCE_PATH).resolve() == skill_dir:
+            return parent
+    return None
+
+
+def command_self_update(args: argparse.Namespace) -> None:
+    info = self_update_info(args.ref)
+    if info["status"] != "update-available" and not args.force:
+        message = "already current" if info["status"] == "current" else "remote ref is not newer"
+        if args.json_output:
+            print_json({**info, "updated": False, "message": message})
+        else:
+            print_self_update_info(info)
+            print(f"No update applied: {message}. Use --force to install from GitHub anyway.")
+        return
+
+    confirm_self_update(args, info)
+    if args.dry_run:
+        if args.json_output:
+            print_json({**info, "updated": False, "dryRun": True})
+        else:
+            print_self_update_info(info)
+            print("Dry run only; no files changed.")
+        return
+
+    skill_dir = Path(info["skillDir"])
+    checkout_root = source_checkout_root(skill_dir)
+    if checkout_root and not args.allow_source_checkout:
+        raise SystemExit(
+            f"Refusing to self-update source checkout at {checkout_root}. "
+            "Use git to update the repository, or pass --allow-source-checkout if you really want to replace it."
+        )
+
+    owner, repo = split_github_slug(SELF_GITHUB_REPOSITORY)
+    with tempfile.TemporaryDirectory(prefix="capelry-self-update-") as temp_root:
+        candidate = Path(temp_root) / "capelry"
+        archive_error: BaseException | None = None
+        try:
+            download_github_archive_path(owner, repo, SELF_SOURCE_PATH, str(info["remoteRef"]), candidate, force=True)
+        except (SystemExit, zipfile.BadZipFile) as error:
+            archive_error = error
+            shutil.rmtree(candidate, ignore_errors=True)
+            candidate.mkdir(parents=True, exist_ok=True)
+            try:
+                download_github_path(owner, repo, SELF_SOURCE_PATH, str(info["remoteRef"]), candidate, SELF_SOURCE_PATH)
+            except SystemExit as api_error:
+                shutil.rmtree(candidate, ignore_errors=True)
+                raise SystemExit(f"{api_error}\n\nGitHub archive self-update download also failed:\n{archive_error}") from api_error
+        validate_downloaded_self_skill(candidate)
+        backup = replace_skill_dir(skill_dir, candidate, keep_backup=args.keep_backup)
+
+    result = {**info, "updated": True, "backup": str(backup) if backup else None}
+    if args.json_output:
+        print_json(result)
+        return
+
+    print(f"Updated Capelry skill to {info['remoteVersion']} from {info['remoteRef']}.")
+    if backup:
+        print(f"backup: {backup}")
+    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:capelry")
+
+
 def add_json_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--json",
@@ -987,7 +1369,7 @@ def add_install_snippet_argument(parser: argparse.ArgumentParser, default: str |
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Search, inspect, and install capabilities from Capelry")
+    parser = argparse.ArgumentParser(description="Search, inspect, install, and update capabilities from Capelry")
     parser.add_argument("--registry", help=f"Registry base URL (default: {DEFAULT_REGISTRY} or CAPELRY_REGISTRY_URL)")
     parser.add_argument("--json", dest="json_output", action="store_true", help="Emit machine-readable JSON output")
     parser.set_defaults(json_output=False)
@@ -1047,6 +1429,34 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--force", action="store_true", help="Replace an existing destination")
     add_json_argument(install)
     install.set_defaults(func=command_install)
+
+    version = subparsers.add_parser(
+        "version",
+        aliases=["check-update"],
+        help="Show this Capelry skill version and the latest GitHub vX.X.X release/tag",
+    )
+    version.add_argument("--ref", help="Compare against a specific GitHub ref or tag, e.g. v1.1.0")
+    version.add_argument("--check", action="store_true", help="Exit with code 1 when an update is available")
+    add_json_argument(version)
+    version.set_defaults(func=command_version)
+
+    self_update = subparsers.add_parser(
+        "self-update",
+        aliases=["update", "upgrade"],
+        help="Replace this installed Capelry skill with the latest GitHub vX.X.X release/tag",
+    )
+    self_update.add_argument("--ref", help="Install a specific GitHub ref or tag, e.g. v1.1.0")
+    self_update.add_argument("--yes", "-y", action="store_true", help="Skip confirmation for non-interactive updates")
+    self_update.add_argument("--dry-run", action="store_true", help="Show what would change without writing files")
+    self_update.add_argument("--force", action="store_true", help="Reinstall even when the remote ref is not newer")
+    self_update.add_argument("--keep-backup", action="store_true", help="Keep the previous skill directory as a backup")
+    self_update.add_argument(
+        "--allow-source-checkout",
+        action="store_true",
+        help="Allow replacing a checked-out capelry-skills source tree; normally use git instead",
+    )
+    add_json_argument(self_update)
+    self_update.set_defaults(func=command_self_update)
 
     return parser
 
