@@ -2,7 +2,6 @@
 name: capelry
 description: Integrate with the Capelry capability registry to search, inspect, compare, install, bootstrap, package, and publish AI-agent skills and adjacent capabilities. Use when a user asks to find or install a skill from Capelry, add Capelry support to a fresh project, publish a capability package, or work on the Capelry registry codebase.
 license: MIT
-compatibility: Agent Skills compatible; designed for Pi, OpenAI Codex, Claude Code, and any agent that can read SKILL.md-style instructions.
 metadata:
   registry: "https://capelry.com"
   bootstrap: "BOOTSTRAP.md"
@@ -195,7 +194,7 @@ python3 <capelry-skill-dir>/scripts/capelry.py install namespace/name --target p
 
 Use `--target agents-project`, `--target claude-project`, or another target if Pi is not the active project format.
 
-The installer first tries the validated Capelry package archive. If a curated provenance-wrapper archive does not contain `SKILL.md`, it falls back to the GitHub source declared by Capelry metadata and downloads that skill directory.
+The installer first tries the validated Capelry package archive. If a curated provenance-wrapper archive does not contain `SKILL.md`, it falls back to a GitHub codeload zip archive for the declared source path, avoiding the GitHub Contents API rate limit. If that archive fallback fails, it tries the GitHub Contents API as a last resort; set `GITHUB_TOKEN` or `GH_TOKEN` to raise API limits for that last-resort path.
 
 ### Publish or Package a Capability
 

@@ -11,10 +11,11 @@ import re
 import shlex
 import shutil
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 DEFAULT_REGISTRY = "https://capelry.com"
@@ -119,8 +120,18 @@ def api_url(base: str, path: str) -> str:
     return f"{base}{path if path.startswith('/') else '/' + path}"
 
 
+def http_headers(url: str, *, user_agent: str = "capelry-skill/0.1") -> dict[str, str]:
+    headers = {"User-Agent": user_agent}
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc.lower() == "api.github.com":
+        token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def fetch_bytes(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "capelry-skill/0.1"})
+    request = urllib.request.Request(url, headers=http_headers(url))
     try:
         with urllib.request.urlopen(request) as response:
             return response.read()
@@ -745,6 +756,75 @@ def github_parts(repository: str) -> tuple[str, str] | None:
     return match.group("owner"), match.group("repo")
 
 
+def github_archive_url(owner: str, repo: str, ref: str) -> str:
+    return f"https://codeload.github.com/{owner}/{repo}/zip/{urllib.parse.quote(ref)}"
+
+
+def normalize_github_source_path(path: str) -> str:
+    normalized = path.strip().replace("\\", "/").strip("/")
+    if normalized in ("", "."):
+        return ""
+    parts = [part for part in normalized.split("/") if part and part != "."]
+    if any(part == ".." for part in parts):
+        raise SystemExit(f"Unsafe GitHub source path: {path}")
+    return "/".join(parts)
+
+
+def github_archive_member_rel(member: zipfile.ZipInfo) -> str:
+    """Return a GitHub zip member path relative to the archive root directory."""
+    parts = PurePosixPath(member.filename).parts
+    if len(parts) <= 1:
+        return ""
+    return PurePosixPath(*parts[1:]).as_posix()
+
+
+def github_archive_rel_members(zf: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
+    rel_members: dict[str, zipfile.ZipInfo] = {}
+    for member in safe_zip_members(zf):
+        rel = github_archive_member_rel(member)
+        if rel:
+            rel_members[rel] = member
+    return rel_members
+
+
+def download_github_archive_path(owner: str, repo: str, path: str, ref: str, dest: Path, force: bool) -> None:
+    source_path_value = normalize_github_source_path(path)
+    archive = fetch_bytes(github_archive_url(owner, repo, ref))
+
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        rel_members = github_archive_rel_members(zf)
+        if source_path_value:
+            direct_file = rel_members.get(source_path_value)
+            skill_marker = f"{source_path_value}/SKILL.md"
+        else:
+            direct_file = None
+            skill_marker = "SKILL.md"
+        if direct_file is None and skill_marker not in rel_members:
+            display_path = source_path_value or "."
+            raise SystemExit(f"GitHub archive did not contain source path: {display_path}")
+
+        prepare_dest(dest, force)
+        if direct_file is not None:
+            target = dest / Path(source_path_value).name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(direct_file))
+        else:
+            prefix = f"{source_path_value}/" if source_path_value else ""
+            for rel, member in rel_members.items():
+                if prefix and not rel.startswith(prefix):
+                    continue
+                output_rel = rel[len(prefix) :] if prefix else rel
+                if not output_rel:
+                    continue
+                out = dest / output_rel
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(zf.read(member))
+
+    if not (dest / "SKILL.md").exists():
+        shutil.rmtree(dest, ignore_errors=True)
+        raise SystemExit("GitHub archive fallback completed but did not produce SKILL.md")
+
+
 def github_api_url(owner: str, repo: str, path: str, ref: str) -> str:
     quoted_path = urllib.parse.quote(path.strip("/"))
     return f"https://api.github.com/repos/{owner}/{repo}/contents/{quoted_path}?ref={urllib.parse.quote(ref)}"
@@ -794,24 +874,39 @@ def download_github_path(
             download_github_path(owner, repo, entry_path, ref, dest, root_path)
 
 
-def install_from_github_source(capability: dict[str, Any], dest: Path, force: bool) -> bool:
+def install_from_github_source(capability: dict[str, Any], dest: Path, force: bool) -> str | None:
     source = capability.get("source") or {}
     repository = source.get("repository")
     source_path_value = source.get("path")
     branch = source.get("defaultBranch") or "main"
     if not isinstance(repository, str) or not isinstance(source_path_value, str):
-        return False
+        return None
     parts = github_parts(repository)
     if parts is None:
-        return False
+        return None
 
     owner, repo = parts
-    prepare_dest(dest, force)
-    download_github_path(owner, repo, source_path_value, branch, dest)
+    if dest.exists() and not force:
+        raise SystemExit(f"Destination already exists: {dest}\nUse --force to replace it.")
+
+    archive_error: BaseException | None = None
+    try:
+        download_github_archive_path(owner, repo, source_path_value, branch, dest, force)
+        return "declared GitHub codeload archive fallback"
+    except (SystemExit, zipfile.BadZipFile) as error:
+        archive_error = error
+
+    try:
+        prepare_dest(dest, force)
+        download_github_path(owner, repo, source_path_value, branch, dest)
+    except SystemExit as error:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise SystemExit(f"{error}\n\nGitHub archive fallback also failed:\n{archive_error}") from error
+
     if not (dest / "SKILL.md").exists():
         shutil.rmtree(dest, ignore_errors=True)
         raise SystemExit("GitHub source fallback completed but did not produce SKILL.md")
-    return True
+    return "declared GitHub Contents API fallback"
 
 
 def resolve_install_dest(args: argparse.Namespace, capability_name: str) -> Path:
@@ -845,10 +940,10 @@ def command_install(args: argparse.Namespace) -> None:
 
     if extract_skill_archive(archive, dest, args.force):
         installed_from = "validated Capelry archive"
-    elif install_from_github_source(capability, dest, args.force):
-        installed_from = "declared GitHub source fallback"
     else:
-        raise SystemExit("Package did not contain SKILL.md and no supported source fallback was available")
+        installed_from = install_from_github_source(capability, dest, args.force)
+        if not installed_from:
+            raise SystemExit("Package did not contain SKILL.md and no supported source fallback was available")
 
     skill_name = installed_skill_name(dest)
     if args.json_output:
