@@ -2,3 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Let engineers use whatever Agentic Coding Agent capabilities are right for them.
+.pi/
