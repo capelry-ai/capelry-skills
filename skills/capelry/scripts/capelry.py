@@ -762,9 +762,12 @@ def github_archive_url(owner: str, repo: str, ref: str) -> str:
 
 def normalize_github_source_path(path: str) -> str:
     normalized = path.strip().replace("\\", "/").strip("/")
-    if not normalized:
-        raise SystemExit("GitHub source path cannot be empty")
-    return normalized
+    if normalized in ("", "."):
+        return ""
+    parts = [part for part in normalized.split("/") if part and part != "."]
+    if any(part == ".." for part in parts):
+        raise SystemExit(f"Unsafe GitHub source path: {path}")
+    return "/".join(parts)
 
 
 def github_archive_member_rel(member: zipfile.ZipInfo) -> str:
@@ -790,10 +793,15 @@ def download_github_archive_path(owner: str, repo: str, path: str, ref: str, des
 
     with zipfile.ZipFile(io.BytesIO(archive)) as zf:
         rel_members = github_archive_rel_members(zf)
-        direct_file = rel_members.get(source_path_value)
-        skill_marker = f"{source_path_value}/SKILL.md"
+        if source_path_value:
+            direct_file = rel_members.get(source_path_value)
+            skill_marker = f"{source_path_value}/SKILL.md"
+        else:
+            direct_file = None
+            skill_marker = "SKILL.md"
         if direct_file is None and skill_marker not in rel_members:
-            raise SystemExit(f"GitHub archive did not contain source path: {source_path_value}")
+            display_path = source_path_value or "."
+            raise SystemExit(f"GitHub archive did not contain source path: {display_path}")
 
         prepare_dest(dest, force)
         if direct_file is not None:
@@ -801,11 +809,11 @@ def download_github_archive_path(owner: str, repo: str, path: str, ref: str, des
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(zf.read(direct_file))
         else:
-            prefix = f"{source_path_value}/"
+            prefix = f"{source_path_value}/" if source_path_value else ""
             for rel, member in rel_members.items():
-                if not rel.startswith(prefix):
+                if prefix and not rel.startswith(prefix):
                     continue
-                output_rel = rel[len(prefix) :]
+                output_rel = rel[len(prefix) :] if prefix else rel
                 if not output_rel:
                     continue
                 out = dest / output_rel
