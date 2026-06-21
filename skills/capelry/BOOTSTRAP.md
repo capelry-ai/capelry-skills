@@ -8,7 +8,7 @@ Bootstrapping installs the skill from GitHub source, not from Capelry.com:
 https://github.com/capelry-ai/capelry-skills
 ```
 
-After install, normal search/inspect/install registry workflows use Capelry.com:
+After install, normal ARD-first search/inspect/install registry workflows use Capelry.com:
 
 ```text
 https://capelry.com
@@ -42,17 +42,17 @@ The downloaded `capelry-bootstrap.py` script fetches the skill source from `http
 
 Agent note: if you know you are running inside Pi, Claude Code, Codex, or another coding agent with a preferred skill location, use the install target guidance below and pass the matching `--target`. If you are unsure, the default portable target is safe.
 
-To verify the install, run `scripts/capelry.py` from the installed skill directory. For the default portable target:
+To verify the install, run `scripts/capelry.py` from the installed skill directory. `search`, `discover`, `info`, and supported `install` flows use ARD by default. For the default portable target:
 
 ```text
-python3 .agents/skills/capelry/scripts/capelry.py search skill
+python3 .agents/skills/capelry/scripts/capelry.py search skill --type skill
 python3 .agents/skills/capelry/scripts/capelry.py version
 ```
 
 For a Pi project target:
 
 ```text
-python3 .pi/skills/capelry/scripts/capelry.py search skill
+python3 .pi/skills/capelry/scripts/capelry.py search skill --type skill
 python3 .pi/skills/capelry/scripts/capelry.py version
 ```
 
@@ -198,7 +198,7 @@ Update the Capelry skill itself after user approval:
 python3 <capelry-skill-dir>/scripts/capelry.py self-update --yes
 ```
 
-Search Capelry:
+Search Capelry through ARD:
 
 ```text
 python3 <capelry-skill-dir>/scripts/capelry.py search "skill creator" --type skill --status passed
@@ -216,9 +216,10 @@ Inspect one capability before installing:
 python3 <capelry-skill-dir>/scripts/capelry.py info openai/skill-creator --install-snippet pi-project
 ```
 
-Batch-inspect several refs before installing:
+If you intentionally need the legacy compatibility API, pass `--api legacy` for `search`, `info`, or `install`, or use the legacy-only bulk command:
 
 ```text
+python3 <capelry-skill-dir>/scripts/capelry.py search "skill creator" --api legacy --type skill --status passed
 python3 <capelry-skill-dir>/scripts/capelry.py bulk-info openai/skill-creator capelry/capelry --install-snippet pi-project
 ```
 

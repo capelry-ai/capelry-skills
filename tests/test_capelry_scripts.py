@@ -1,0 +1,756 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import io
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+import urllib.parse
+import urllib.request
+import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+CAPELRY_SCRIPT = ROOT / "skills" / "capelry" / "scripts" / "capelry.py"
+BOOTSTRAP_SCRIPT = ROOT / "skills" / "capelry" / "scripts" / "bootstrap.py"
+SELF_CATALOG = ROOT / "skills" / "capelry" / "ai-catalog.json"
+
+
+def clean_env(**overrides: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("CAPELRY_USE_LEGACY_API", None)
+    env.update(overrides)
+    return env
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class RegistryFixtureHandler(BaseHTTPRequestHandler):
+    legacy_requests: list[str] = []
+    ard_requests: list[dict[str, object]] = []
+    agents_requests: list[str] = []
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def send_json(self, payload: object, status: int = 200) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_bytes(self, payload: bytes, content_type: str = "application/octet-stream", status: int = 200) -> None:
+        self.send_response(status)
+        self.send_header("content-type", content_type)
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def fixture_base(self) -> str:
+        return f"http://{self.headers['Host']}"
+
+    @staticmethod
+    def zip_bytes(entries: dict[str, str]) -> bytes:
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            for name, content in entries.items():
+                zf.writestr(name, content)
+        return archive.getvalue()
+
+    @classmethod
+    def good_skill_zip(cls) -> bytes:
+        return cls.zip_bytes({"SKILL.md": "name: zip-skill\n"})
+
+    @classmethod
+    def unsafe_skill_zip(cls) -> bytes:
+        return cls.zip_bytes({"../evil/SKILL.md": "name: evil\n"})
+
+    @classmethod
+    def source_skill_zip(cls) -> bytes:
+        return cls.zip_bytes({"repo-fixture/skills/source-skill/SKILL.md": "name: source-skill\n"})
+
+    def ard_entry(self, score: int | None = None, kind: str = "default") -> dict[str, object]:
+        base = self.fixture_base()
+        entry: dict[str, object] = {
+            "identifier": "urn:ai:github.com:capelry-ai:capelry-skills:demo-skill",
+            "version": "1.0.0",
+            "displayName": "Demo ARD Skill",
+            "type": "application/vnd.capelry.skill-source+json",
+            "url": "https://github.com/capelry-ai/capelry-skills",
+            "description": "Fixture skill returned by ARD.",
+            "source": "http://fixture-registry.test",
+            "metadata": {
+                "com.capelry.trustState": "source-hosted",
+                "com.capelry.legacyRef": "capelry/demo-skill",
+                "com.capelry.sourceRepository": "https://github.com/capelry-ai/capelry-skills",
+            },
+            "trustManifest": {
+                "identity": "urn:ai:github.com:capelry-ai:capelry-skills:demo-skill",
+                "identityType": "other",
+                "provenance": [{"relation": "publishedFrom", "sourceId": "https://github.com/capelry-ai/capelry-skills"}],
+            },
+        }
+        if kind == "zip":
+            archive = self.good_skill_zip()
+            entry.update(
+                {
+                    "identifier": "urn:ai:example.com:skills:zip-skill",
+                    "displayName": "Zip Skill",
+                    "type": "application/vnd.capelry.skill+zip",
+                    "url": f"{base}/archives/good.zip",
+                    "metadata": {
+                        "com.capelry.trustState": "checksum-only",
+                        "com.capelry.legacyRef": "capelry/zip-skill",
+                        "com.capelry.archiveUrl": f"{base}/archives/good.zip",
+                        "com.capelry.archiveChecksumSha256": hashlib.sha256(archive).hexdigest(),
+                    },
+                }
+            )
+        elif kind == "bad-checksum":
+            entry.update(
+                {
+                    "identifier": "urn:ai:example.com:skills:bad-checksum",
+                    "displayName": "Bad Checksum Skill",
+                    "type": "application/vnd.capelry.skill+zip",
+                    "url": f"{base}/archives/good.zip",
+                    "metadata": {
+                        "com.capelry.trustState": "checksum-only",
+                        "com.capelry.legacyRef": "capelry/bad-checksum",
+                        "com.capelry.archiveUrl": f"{base}/archives/good.zip",
+                        "com.capelry.archiveChecksumSha256": "0" * 64,
+                    },
+                }
+            )
+        elif kind == "unsafe":
+            entry.update(
+                {
+                    "identifier": "urn:ai:example.com:skills:unsafe-zip",
+                    "displayName": "Unsafe Zip Skill",
+                    "type": "application/vnd.capelry.skill+zip",
+                    "url": f"{base}/archives/unsafe.zip",
+                    "metadata": {
+                        "com.capelry.trustState": "checksum-only",
+                        "com.capelry.legacyRef": "capelry/unsafe-zip",
+                        "com.capelry.archiveUrl": f"{base}/archives/unsafe.zip",
+                        "com.capelry.archiveChecksumSha256": hashlib.sha256(self.unsafe_skill_zip()).hexdigest(),
+                    },
+                }
+            )
+        elif kind == "source":
+            entry.update(
+                {
+                    "identifier": "urn:ai:example.com:skills:source-skill",
+                    "displayName": "Source Skill",
+                    "type": "application/vnd.capelry.skill-source+json",
+                    "data": {
+                        "repository": "https://github.com/example/source-skill",
+                        "path": "skills/source-skill",
+                        "ref": "fixture-ref",
+                        "archiveUrl": f"{base}/archives/source.zip",
+                    },
+                    "metadata": {
+                        "com.capelry.trustState": "source-hosted",
+                        "com.capelry.legacyRef": "capelry/source-skill",
+                    },
+                }
+            )
+        elif kind == "unsupported":
+            entry.update(
+                {
+                    "identifier": "urn:ai:example.com:apis:demo",
+                    "displayName": "Demo API",
+                    "type": "application/openapi+json",
+                    "url": f"{base}/openapi.json",
+                    "metadata": {
+                        "com.capelry.trustState": "unsigned",
+                        "com.capelry.legacyRef": "capelry/unsupported",
+                    },
+                }
+            )
+        if score is not None:
+            entry["score"] = score
+        return entry
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib handler hook
+        if self.path == "/archives/good.zip":
+            self.send_bytes(self.good_skill_zip(), "application/zip")
+            return
+        if self.path == "/archives/unsafe.zip":
+            self.send_bytes(self.unsafe_skill_zip(), "application/zip")
+            return
+        if self.path == "/archives/source.zip":
+            self.send_bytes(self.source_skill_zip(), "application/zip")
+            return
+
+        if self.path.startswith("/agents?"):
+            self.agents_requests.append(self.path)
+            parsed = urllib.parse.urlparse(self.path)
+            filter_value = urllib.parse.parse_qs(parsed.query).get("filter", [""])[0]
+            kind = "default"
+            if "zip-skill" in filter_value:
+                kind = "zip"
+            elif "bad-checksum" in filter_value:
+                kind = "bad-checksum"
+            elif "unsafe-zip" in filter_value:
+                kind = "unsafe"
+            elif "source-skill" in filter_value:
+                kind = "source"
+            elif "unsupported" in filter_value:
+                kind = "unsupported"
+            self.send_json({"items": [self.ard_entry(kind=kind)], "total": 1})
+            return
+
+        if self.path.startswith("/api/capabilities?"):
+            self.legacy_requests.append(self.path)
+            self.send_json(
+                {
+                    "capabilities": [
+                        {
+                            "namespace": "capelry",
+                            "name": "demo-skill",
+                            "summary": "Fixture skill returned by legacy API.",
+                            "packageType": "skill",
+                            "latestVersion": {
+                                "version": "1.0.0",
+                                "validationStatus": "passed",
+                            },
+                            "source": {
+                                "repository": "https://github.com/capelry-ai/capelry-skills",
+                                "path": "skills/capelry",
+                            },
+                        }
+                    ],
+                    "meta": {"returned": 1},
+                }
+            )
+            return
+
+        if self.path == "/api/capabilities/capelry/demo-skill":
+            self.send_json(
+                {
+                    "capability": {
+                        "namespace": "capelry",
+                        "name": "demo-skill",
+                        "summary": "Fixture detail.",
+                        "packageType": "skill",
+                        "latestVersion": {
+                            "version": "1.0.0",
+                            "validationStatus": "passed",
+                        },
+                    }
+                }
+            )
+            return
+
+        self.send_json({"error": "not found"}, status=404)
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib handler hook
+        length = int(self.headers.get("content-length", "0"))
+        raw_body = self.rfile.read(length) if length else b"{}"
+        body = json.loads(raw_body.decode("utf-8"))
+
+        if self.path == "/search":
+            self.ard_requests.append(body)
+            query = body.get("query") if isinstance(body, dict) else None
+            if isinstance(query, dict) and query.get("text") == "bad-filter":
+                self.send_json({"errorCode": "INVALID_ARGUMENT", "message": "bad ARD filter"}, status=400)
+                return
+            if isinstance(query, dict) and query.get("text") == "missing-ard":
+                self.send_json({"errorCode": "NOT_FOUND", "message": "ARD search unavailable"}, status=404)
+                return
+            self.send_json({"results": [self.ard_entry(score=91)], "referrals": []})
+            return
+
+        self.send_json({"error": "not found"}, status=404)
+
+
+class RegistryFixture:
+    def __enter__(self) -> "RegistryFixture":
+        RegistryFixtureHandler.legacy_requests = []
+        RegistryFixtureHandler.ard_requests = []
+        RegistryFixtureHandler.agents_requests = []
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), RegistryFixtureHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+    @property
+    def url(self) -> str:
+        host, port = self.server.server_address
+        return f"http://{host}:{port}"
+
+
+class CapelryScriptTests(unittest.TestCase):
+    def test_legacy_search_requires_explicit_api_flag(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "skill",
+                    "--api",
+                    "legacy",
+                    "--limit",
+                    "1",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["registry"], fixture.url)
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["capabilities"][0]["ref"], "capelry/demo-skill")
+        self.assertTrue(RegistryFixtureHandler.legacy_requests)
+
+    def test_env_can_explicitly_select_legacy_search(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "skill",
+                    "--limit",
+                    "1",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(CAPELRY_USE_LEGACY_API="1"),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["capabilities"][0]["ref"], "capelry/demo-skill")
+        self.assertTrue(RegistryFixtureHandler.legacy_requests)
+
+    def test_fixture_server_emulates_ard_search_endpoint(self) -> None:
+        with RegistryFixture() as fixture:
+            request = urllib.request.Request(
+                f"{fixture.url}/search",
+                data=json.dumps({"query": {"text": "skill"}, "federation": "none"}).encode("utf-8"),
+                headers={"content-type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(
+            payload["results"][0]["identifier"],
+            "urn:ai:github.com:capelry-ai:capelry-skills:demo-skill",
+        )
+        self.assertEqual(RegistryFixtureHandler.ard_requests[0]["federation"], "none")
+
+    def test_ard_search_posts_pinned_payload_and_filters_without_legacy_fallback(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "ard skill",
+                    "--limit",
+                    "5",
+                    "--type",
+                    "skill",
+                    "--media-type",
+                    "application/example+json",
+                    "--publisher",
+                    "github.com",
+                    "--trust-state",
+                    "source-hosted",
+                    "--domain",
+                    "devops",
+                    "--phase",
+                    "production",
+                    "--filter",
+                    "tags=ard,skill",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["api"], "ard")
+        self.assertEqual(payload["entries"][0]["identifier"], "urn:ai:github.com:capelry-ai:capelry-skills:demo-skill")
+        self.assertEqual(payload["entries"][0]["displayName"], "Demo ARD Skill")
+        self.assertEqual(payload["entries"][0]["mediaType"], "application/vnd.capelry.skill-source+json")
+        self.assertEqual(payload["entries"][0]["score"], 91)
+        self.assertEqual(payload["entries"][0]["source"], "http://fixture-registry.test")
+        self.assertEqual(payload["entries"][0]["trustState"], "source-hosted")
+        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        request = RegistryFixtureHandler.ard_requests[0]
+        self.assertEqual(request["query"]["text"], "ard skill")
+        self.assertEqual(request["federation"], "none")
+        self.assertEqual(request["pageSize"], 5)
+        filters = request["query"]["filter"]
+        self.assertEqual(
+            filters["type"],
+            [
+                "application/vnd.capelry.skill+zip",
+                "application/vnd.capelry.skill-source+json",
+                "application/example+json",
+            ],
+        )
+        self.assertEqual(filters["publisher"], ["github.com"])
+        self.assertEqual(filters["metadata.com.capelry.trustState"], ["source-hosted"])
+        self.assertEqual(filters["metadata.com.capelry.domains"], ["devops"])
+        self.assertEqual(filters["metadata.com.capelry.lifecyclePhases"], ["production"])
+        self.assertEqual(filters["tags"], ["ard", "skill"])
+
+    def test_ard_error_shape_is_reported_clearly(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "bad-filter",
+                ],
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ARD INVALID_ARGUMENT", result.stderr)
+        self.assertIn("bad ARD filter", result.stderr)
+        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+
+    def test_default_search_falls_back_to_legacy_when_ard_endpoint_is_missing(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "missing-ard",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["capabilities"][0]["ref"], "capelry/demo-skill")
+        self.assertTrue(RegistryFixtureHandler.legacy_requests)
+
+    def test_explicit_ard_search_does_not_fallback_when_endpoint_is_missing(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "missing-ard",
+                    "--api",
+                    "ard",
+                ],
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ARD NOT_FOUND", result.stderr)
+        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+
+    def test_ard_info_resolves_identifier_through_agents_endpoint(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "info",
+                    "urn:ai:github.com:capelry-ai:capelry-skills:demo-skill",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["entry"]["mediaType"], "application/vnd.capelry.skill-source+json")
+        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        self.assertTrue(RegistryFixtureHandler.agents_requests)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(RegistryFixtureHandler.agents_requests[0]).query)
+        self.assertIn("identifier", query["filter"][0])
+
+    def test_ard_info_resolves_legacy_ref_through_metadata_alias_by_default(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "info",
+                    "capelry/demo-skill",
+                    "--install-snippet",
+                    "pi-project",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["entry"]["legacyRef"], "capelry/demo-skill")
+        self.assertIn("install capelry/demo-skill --target pi-project", payload["entry"]["installSnippet"])
+        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(RegistryFixtureHandler.agents_requests[0]).query)
+        self.assertIn("metadata.com.capelry.legacyRef", query["filter"][0])
+
+    def test_discover_uses_ard_search_by_default(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "discover",
+                    "demo skill",
+                    "--no-expand",
+                    "--top",
+                    "1",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["api"], "ard")
+        self.assertEqual(payload["entries"][0]["displayName"], "Demo ARD Skill")
+        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        self.assertTrue(RegistryFixtureHandler.ard_requests)
+
+    def test_ard_zip_install_verifies_checksum_and_extracts_safely(self) -> None:
+        with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "zip-skill"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "install",
+                    "capelry/zip-skill",
+                    "--dest",
+                    str(dest),
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+            self.assertTrue((dest / "SKILL.md").exists())
+            self.assertIn("trust: checksum-only", result.stdout)
+            self.assertIn("checksum:", result.stdout)
+            self.assertFalse(RegistryFixtureHandler.legacy_requests)
+
+    def test_ard_zip_install_rejects_checksum_mismatch(self) -> None:
+        with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "bad-checksum"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "install",
+                    "capelry/bad-checksum",
+                    "--dest",
+                    str(dest),
+                ],
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("SHA-256 mismatch", result.stderr)
+            self.assertFalse(dest.exists())
+
+    def test_invalid_checksum_metadata_fails_closed(self) -> None:
+        capelry = load_module("capelry_cli", CAPELRY_SCRIPT)
+        with self.assertRaisesRegex(SystemExit, "Invalid archive SHA-256 metadata"):
+            capelry.verify_archive_checksum(b"fixture", "not-a-sha256")
+
+    def test_ard_zip_install_rejects_unsafe_archive_path(self) -> None:
+        with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "unsafe"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "install",
+                    "capelry/unsafe-zip",
+                    "--dest",
+                    str(dest),
+                ],
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Unsafe archive path", result.stderr)
+            self.assertFalse(dest.exists())
+
+    def test_ard_source_install_uses_pinned_archive_descriptor(self) -> None:
+        with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "source-skill"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "install",
+                    "capelry/source-skill",
+                    "--dest",
+                    str(dest),
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+            payload = json.loads(result.stdout)
+            self.assertTrue((dest / "SKILL.md").exists())
+            self.assertEqual(payload["installedFrom"], "ARD source archive descriptor at fixture-ref")
+            self.assertEqual(payload["mediaType"], "application/vnd.capelry.skill-source+json")
+
+    def test_ard_install_refuses_unsupported_media_type_with_guidance(self) -> None:
+        with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "unsupported"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "install",
+                    "capelry/unsupported",
+                    "--dest",
+                    str(dest),
+                ],
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Unsupported ARD media type", result.stderr)
+            self.assertIn("Open/connect manually", result.stderr)
+            self.assertFalse(dest.exists())
+
+    def test_self_ai_catalog_entry_validates_fixture_shape(self) -> None:
+        catalog = json.loads(SELF_CATALOG.read_text(encoding="utf-8"))
+        self.assertEqual(catalog["specVersion"], "1.0")
+        self.assertEqual(catalog["host"]["identifier"], "https://github.com/capelry-ai/capelry-skills")
+        entries = catalog["entries"]
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        for field in ("identifier", "displayName", "type", "description", "metadata", "trustManifest"):
+            self.assertIn(field, entry)
+        self.assertTrue(entry["identifier"].startswith("urn:ai:"))
+        self.assertEqual(entry["type"], "application/vnd.capelry.skill-source+json")
+        self.assertEqual(("url" in entry) + ("data" in entry), 1)
+        self.assertEqual(entry["data"]["repository"], "https://github.com/capelry-ai/capelry-skills")
+        self.assertEqual(entry["data"]["path"], "skills/capelry")
+        self.assertEqual(entry["metadata"]["com.capelry.legacyRef"], "capelry/capelry")
+        self.assertEqual(entry["metadata"]["com.capelry.trustState"], "source-hosted")
+        self.assertLessEqual(len(entry["representativeQueries"]), 10)
+        for value in entry["metadata"].values():
+            self.assertTrue(value is None or isinstance(value, (str, int, float, bool)))
+        self.assertEqual(entry["trustManifest"]["identity"], entry["identifier"])
+
+    def test_bootstrap_finds_and_installs_skill_from_zip_fixture(self) -> None:
+        bootstrap = load_module("capelry_bootstrap", BOOTSTRAP_SCRIPT)
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("repo-main/README.md", "fixture")
+            zf.writestr("repo-main/skills/capelry/SKILL.md", "name: capelry\n")
+            zf.writestr("repo-main/skills/capelry/scripts/capelry.py", "print('ok')\n")
+        archive.seek(0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "capelry"
+            with zipfile.ZipFile(archive) as zf:
+                source_path, rel_members = bootstrap.find_skill_source(
+                    zf,
+                    ("skills/capelry",),
+                )
+                bootstrap.install_source_path(
+                    zf,
+                    rel_members,
+                    source_path,
+                    dest,
+                    replace=True,
+                )
+
+            self.assertEqual(source_path, "skills/capelry")
+            self.assertTrue((dest / "SKILL.md").exists())
+            self.assertTrue((dest / "scripts" / "capelry.py").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
