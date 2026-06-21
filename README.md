@@ -192,7 +192,7 @@ python3 .agents/skills/capelry/scripts/capelry.py info openai/skill-creator --in
 python3 .agents/skills/capelry/scripts/capelry.py install openai/skill-creator --target agents-project
 ```
 
-Agent-friendly discovery output is available with filters and JSON. `search`, `discover`, `info`, and supported `install` flows use ARD endpoints by default (`POST /search` and `GET /agents`), while legacy Capelry API reads/installs require `--api legacy` or `CAPELRY_USE_LEGACY_API=1` during the migration window:
+Agent-friendly discovery output is available with filters and JSON. `search`, `discover`, `info`, and supported `install` flows try ARD endpoints first (`POST /search` and `GET /agents`). Until every deployed registry exposes those routes, the CLI automatically falls back to the legacy Capelry API when an ARD endpoint is missing; pass `--api ard` to fail closed or `--api legacy` / `CAPELRY_USE_LEGACY_API=1` to intentionally use legacy compatibility:
 
 ```text
 python3 .pi/skills/capelry/scripts/capelry.py discover "production readiness" --top 5 --install-snippet pi-project --json

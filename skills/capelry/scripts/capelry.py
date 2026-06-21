@@ -37,6 +37,8 @@ ARD_PACKAGE_TYPE_MEDIA_TYPES = {
 ARD_TRUST_STATE_FILTER = "metadata.com.capelry.trustState"
 ARD_VALIDATION_STATUS_FILTER = "metadata.com.capelry.validationStatus"
 ARD_SOURCE_REPOSITORY_FILTER = "metadata.com.capelry.sourceRepository"
+ARD_DOMAIN_FILTER = "metadata.com.capelry.domains"
+ARD_PHASE_FILTER = "metadata.com.capelry.lifecyclePhases"
 ARD_LEGACY_REF_FILTER = "metadata.com.capelry.legacyRef"
 ARD_TRUST_STATE_METADATA = "com.capelry.trustState"
 ARD_LEGACY_REF_METADATA = "com.capelry.legacyRef"
@@ -246,6 +248,16 @@ def post_json(url: str, payload: dict[str, Any]) -> Any:
         raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
 
 
+class ArdApiError(SystemExit):
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def should_fallback_to_legacy_api(args: argparse.Namespace, error: ArdApiError) -> bool:
+    return getattr(args, "api", None) is None and not env_truthy("CAPELRY_USE_LEGACY_API") and error.status in {404, 405, 501}
+
+
 def ard_error_message(url: str, status: int, body_text: str) -> str:
     try:
         payload = json.loads(body_text)
@@ -272,7 +284,7 @@ def fetch_ard_json(url: str) -> Any:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         body_text = error.read().decode("utf-8", errors="replace")
-        raise SystemExit(ard_error_message(url, error.code, body_text)) from error
+        raise ArdApiError(error.code, ard_error_message(url, error.code, body_text)) from error
     except urllib.error.URLError as error:
         raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
 
@@ -294,7 +306,7 @@ def post_ard_json(url: str, payload: dict[str, Any]) -> Any:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         body_text = error.read().decode("utf-8", errors="replace")
-        raise SystemExit(ard_error_message(url, error.code, body_text)) from error
+        raise ArdApiError(error.code, ard_error_message(url, error.code, body_text)) from error
     except urllib.error.URLError as error:
         raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
 
@@ -457,6 +469,8 @@ def build_ard_filter(args: argparse.Namespace) -> dict[str, list[str]]:
     add_ard_filter(filters, ARD_TRUST_STATE_FILTER, split_arg_values(getattr(args, "trust_state", None)))
     add_ard_filter(filters, ARD_VALIDATION_STATUS_FILTER, getattr(args, "status", None))
     add_ard_filter(filters, ARD_SOURCE_REPOSITORY_FILTER, getattr(args, "source", None))
+    add_ard_filter(filters, ARD_DOMAIN_FILTER, getattr(args, "domain", None))
+    add_ard_filter(filters, ARD_PHASE_FILTER, getattr(args, "phase", None))
     for raw_filter in getattr(args, "ard_filter", None) or []:
         field, values = parse_ard_filter_arg(raw_filter)
         add_ard_filter(filters, field, values)
@@ -875,29 +889,37 @@ def command_search(args: argparse.Namespace) -> None:
     queries = expanded_queries(args.query) if args.expand else [args.query]
     display_limit = result_limit(args.limit)
 
-    if selected_registry_api(args) == "ard":
-        entries = collect_ard_search_results(base, args, queries, per_query_limit=display_limit)
-        limited_entries = entries[:display_limit]
-        if args.json_output:
-            print_json(
-                {
-                    "registry": base,
-                    "api": "ard",
-                    "query": args.query,
-                    "queries": queries,
-                    "request": ard_search_payload(args, args.query, page_size=display_limit),
-                    "count": len(entries),
-                    "limit": display_limit,
-                    "suggestedQueries": expanded_queries(args.query)[1:],
-                    "entries": [ard_entry_output(entry) for entry in limited_entries],
-                }
-            )
+    use_legacy = selected_registry_api(args) != "ard"
+    if not use_legacy:
+        try:
+            entries = collect_ard_search_results(base, args, queries, per_query_limit=display_limit)
+            limited_entries = entries[:display_limit]
+            if args.json_output:
+                print_json(
+                    {
+                        "registry": base,
+                        "api": "ard",
+                        "query": args.query,
+                        "queries": queries,
+                        "request": ard_search_payload(args, args.query, page_size=display_limit),
+                        "count": len(entries),
+                        "limit": display_limit,
+                        "suggestedQueries": expanded_queries(args.query)[1:],
+                        "entries": [ard_entry_output(entry) for entry in limited_entries],
+                    }
+                )
+                return
+            if not entries:
+                print("No ARD entries found.")
+                return
+            print_ard_entries(limited_entries)
             return
-        if not entries:
-            print("No ARD entries found.")
-            return
-        print_ard_entries(limited_entries)
-        return
+        except ArdApiError as error:
+            if not should_fallback_to_legacy_api(args, error):
+                raise
+            use_legacy = True
+            if not args.json_output:
+                eprint(f"ARD endpoint unavailable ({error.status}); falling back to legacy API. Use --api ard to fail instead.")
 
     api_limit = clamp_api_search_limit(max(display_limit, 25))
     filtered = collect_search_results(base, args, queries, per_query_limit=api_limit)
@@ -952,16 +974,28 @@ def command_search(args: argparse.Namespace) -> None:
 
 def command_info(args: argparse.Namespace) -> None:
     base = registry_base(args)
-    if selected_registry_api(args) == "ard":
-        entries = ard_agents_entries(base, field=ard_resolution_field(args.ref), value=args.ref, page_size=1)
-        if not entries:
-            raise SystemExit(f"No ARD entry found for {args.ref}")
-        entry = entries[0]
-        if args.json_output:
-            print_json({"registry": base, "api": "ard", "entry": ard_entry_output(entry)})
+    use_legacy = selected_registry_api(args) != "ard"
+    if not use_legacy:
+        try:
+            entries = ard_agents_entries(base, field=ard_resolution_field(args.ref), value=args.ref, page_size=1)
+            if not entries:
+                raise SystemExit(f"No ARD entry found for {args.ref}")
+            entry = entries[0]
+            if args.json_output:
+                output = ard_entry_output(entry)
+                legacy_ref = ard_legacy_ref(entry)
+                if args.install_snippet and legacy_ref:
+                    output["installSnippet"] = install_snippet(legacy_ref, args.install_snippet)
+                print_json({"registry": base, "api": "ard", "entry": output})
+                return
+            print_ard_detail_summaries([ard_detail_summary(entry, args.install_snippet)])
             return
-        print_ard_entries([entry])
-        return
+        except ArdApiError as error:
+            if args.ref.startswith("urn:ai:") or not should_fallback_to_legacy_api(args, error):
+                raise
+            use_legacy = True
+            if not args.json_output:
+                eprint(f"ARD endpoint unavailable ({error.status}); falling back to legacy API. Use --api ard to fail instead.")
 
     capability = capability_detail(base, args.ref)
     latest = capability.get("latestVersion") or {}
@@ -1029,31 +1063,39 @@ def command_discover(args: argparse.Namespace) -> None:
     top = min(max(args.top, 1), 25)
     api_limit = clamp_api_search_limit(max(args.search_limit, top, 25))
 
-    if selected_registry_api(args) == "ard":
-        entries = collect_ard_search_results(base, args, queries, per_query_limit=api_limit)
-        shortlist = entries[:top]
-        summaries = [ard_detail_summary(entry, args.install_snippet) for entry in shortlist]
-        if args.json_output:
-            print_json(
-                {
-                    "registry": base,
-                    "api": "ard",
-                    "query": args.query,
-                    "queries": queries,
-                    "filters": build_ard_filter(args),
-                    "entries": [ard_entry_output(entry) for entry in shortlist],
-                    "shortlist": summaries,
-                }
-            )
-            return
+    use_legacy = selected_registry_api(args) != "ard"
+    if not use_legacy:
+        try:
+            entries = collect_ard_search_results(base, args, queries, per_query_limit=api_limit)
+            shortlist = entries[:top]
+            summaries = [ard_detail_summary(entry, args.install_snippet) for entry in shortlist]
+            if args.json_output:
+                print_json(
+                    {
+                        "registry": base,
+                        "api": "ard",
+                        "query": args.query,
+                        "queries": queries,
+                        "filters": build_ard_filter(args),
+                        "entries": [ard_entry_output(entry) for entry in shortlist],
+                        "shortlist": summaries,
+                    }
+                )
+                return
 
-        if not shortlist:
-            print("No ARD entries found.")
-            return
+            if not shortlist:
+                print("No ARD entries found.")
+                return
 
-        print("Queries: " + "; ".join(queries))
-        print_ard_detail_summaries(summaries)
-        return
+            print("Queries: " + "; ".join(queries))
+            print_ard_detail_summaries(summaries)
+            return
+        except ArdApiError as error:
+            if not should_fallback_to_legacy_api(args, error):
+                raise
+            use_legacy = True
+            if not args.json_output:
+                eprint(f"ARD endpoint unavailable ({error.status}); falling back to legacy API. Use --api ard to fail instead.")
 
     filtered = collect_search_results(base, args, queries, per_query_limit=api_limit)
     refs = [capability_ref(item) for item in filtered[:top]]
@@ -1348,6 +1390,8 @@ def normalize_sha256(value: str | None) -> str | None:
 def verify_archive_checksum(archive: bytes, expected: str | None) -> str | None:
     checksum = hashlib.sha256(archive).hexdigest()
     normalized_expected = normalize_sha256(expected)
+    if isinstance(expected, str) and expected.strip() and normalized_expected is None:
+        raise SystemExit(f"Invalid archive SHA-256 metadata: {expected}")
     if normalized_expected and checksum != normalized_expected:
         raise SystemExit(f"Archive SHA-256 mismatch: expected {normalized_expected}, got {checksum}")
     return checksum
@@ -1564,7 +1608,15 @@ def command_install(args: argparse.Namespace) -> None:
         return
 
     base = registry_base(args)
-    entry = resolve_ard_entry_for_install(base, args.ref)
+    try:
+        entry = resolve_ard_entry_for_install(base, args.ref)
+    except ArdApiError as error:
+        if args.ref.startswith("urn:ai:") or not should_fallback_to_legacy_api(args, error):
+            raise
+        if not args.json_output:
+            eprint(f"ARD endpoint unavailable ({error.status}); falling back to legacy API. Use --api ard to fail instead.")
+        command_install_legacy(args)
+        return
     media_type = ard_entry_media_type(entry)
     dest = resolve_install_dest(args, ard_entry_install_name(entry, args.ref))
     if not args.json_output:

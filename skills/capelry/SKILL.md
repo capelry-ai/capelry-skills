@@ -72,7 +72,7 @@ Recommended agent algorithm, aligned with the Capelry API docs at `https://capel
 2. Search with narrow ARD filters first: `--type skill --status passed` and a small top-N target. `search` and `discover` use `POST /search` by default.
 3. Inspect shortlisted entries with `info`; it resolves both `urn:ai:...` identifiers and legacy `namespace/name` refs through ARD `/agents` metadata aliases by default.
 4. Compare trust/install metadata: ARD identifier, media type, source, trust state, Trust Manifest/provenance, install instructions, and checksum when present.
-5. Return a concise shortlist using the output format below. Install only after user confirmation unless the user requested a specific known capability. Use `--api legacy` or `CAPELRY_USE_LEGACY_API=1` only when you intentionally need the old `/api/capabilities` compatibility API.
+5. Return a concise shortlist using the output format below. Install only after user confirmation unless the user requested a specific known capability. The CLI falls back to the old compatibility API only when an ARD endpoint is missing; use `--api ard` to fail closed, or `--api legacy` / `CAPELRY_USE_LEGACY_API=1` when you intentionally need the old `/api/capabilities` compatibility API.
 
 Preferred CLI for agentic discovery:
 
@@ -168,6 +168,8 @@ Useful search flags:
 - `--filter FIELD=VALUE`: pass a generic ARD filter, e.g. `tags=ard,skill`.
 - `--status passed`: filter by `metadata.com.capelry.validationStatus`.
 - `--source github/awesome-copilot`: filter by `metadata.com.capelry.sourceRepository`.
+- `--domain devops` / `--phase production`: map legacy facet filters to `metadata.com.capelry.domains` and `metadata.com.capelry.lifecyclePhases`.
+- `--api ard`: require ARD and fail closed if the endpoint is unavailable.
 - `--api legacy`: intentionally use the old `/api/capabilities` compatibility API.
 
 Direct ARD endpoint: `POST {CAPELRY_REGISTRY_URL}/search` with `{"query":{"text":"query","filter":{...}},"federation":"none","pageSize":10}`.

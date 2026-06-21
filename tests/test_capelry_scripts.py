@@ -270,6 +270,9 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
             if isinstance(query, dict) and query.get("text") == "bad-filter":
                 self.send_json({"errorCode": "INVALID_ARGUMENT", "message": "bad ARD filter"}, status=400)
                 return
+            if isinstance(query, dict) and query.get("text") == "missing-ard":
+                self.send_json({"errorCode": "NOT_FOUND", "message": "ARD search unavailable"}, status=404)
+                return
             self.send_json({"results": [self.ard_entry(score=91)], "referrals": []})
             return
 
@@ -387,6 +390,10 @@ class CapelryScriptTests(unittest.TestCase):
                     "github.com",
                     "--trust-state",
                     "source-hosted",
+                    "--domain",
+                    "devops",
+                    "--phase",
+                    "production",
                     "--filter",
                     "tags=ard,skill",
                     "--json",
@@ -421,6 +428,8 @@ class CapelryScriptTests(unittest.TestCase):
         )
         self.assertEqual(filters["publisher"], ["github.com"])
         self.assertEqual(filters["metadata.com.capelry.trustState"], ["source-hosted"])
+        self.assertEqual(filters["metadata.com.capelry.domains"], ["devops"])
+        self.assertEqual(filters["metadata.com.capelry.lifecyclePhases"], ["production"])
         self.assertEqual(filters["tags"], ["ard", "skill"])
 
     def test_ard_error_shape_is_reported_clearly(self) -> None:
@@ -442,6 +451,50 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ARD INVALID_ARGUMENT", result.stderr)
         self.assertIn("bad ARD filter", result.stderr)
+        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+
+    def test_default_search_falls_back_to_legacy_when_ard_endpoint_is_missing(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "missing-ard",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["capabilities"][0]["ref"], "capelry/demo-skill")
+        self.assertTrue(RegistryFixtureHandler.legacy_requests)
+
+    def test_explicit_ard_search_does_not_fallback_when_endpoint_is_missing(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "missing-ard",
+                    "--api",
+                    "ard",
+                ],
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ARD NOT_FOUND", result.stderr)
         self.assertFalse(RegistryFixtureHandler.legacy_requests)
 
     def test_ard_info_resolves_identifier_through_agents_endpoint(self) -> None:
@@ -479,6 +532,8 @@ class CapelryScriptTests(unittest.TestCase):
                     fixture.url,
                     "info",
                     "capelry/demo-skill",
+                    "--install-snippet",
+                    "pi-project",
                     "--json",
                 ],
                 check=True,
@@ -489,6 +544,7 @@ class CapelryScriptTests(unittest.TestCase):
 
         payload = json.loads(result.stdout)
         self.assertEqual(payload["entry"]["legacyRef"], "capelry/demo-skill")
+        self.assertIn("install capelry/demo-skill --target pi-project", payload["entry"]["installSnippet"])
         self.assertFalse(RegistryFixtureHandler.legacy_requests)
         query = urllib.parse.parse_qs(urllib.parse.urlparse(RegistryFixtureHandler.agents_requests[0]).query)
         self.assertIn("metadata.com.capelry.legacyRef", query["filter"][0])
@@ -567,6 +623,11 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("SHA-256 mismatch", result.stderr)
             self.assertFalse(dest.exists())
+
+    def test_invalid_checksum_metadata_fails_closed(self) -> None:
+        capelry = load_module("capelry_cli", CAPELRY_SCRIPT)
+        with self.assertRaisesRegex(SystemExit, "Invalid archive SHA-256 metadata"):
+            capelry.verify_archive_checksum(b"fixture", "not-a-sha256")
 
     def test_ard_zip_install_rejects_unsafe_archive_path(self) -> None:
         with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
