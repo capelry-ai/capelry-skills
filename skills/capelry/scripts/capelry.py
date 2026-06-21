@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -26,6 +27,19 @@ SELF_SOURCE_PATH = "skills/capelry"
 SELF_DEFAULT_REF = "main"
 API_SEARCH_LIMIT_MIN = 1
 API_SEARCH_LIMIT_MAX = 100
+ARD_SKILL_MEDIA_TYPES = (
+    "application/vnd.capelry.skill+zip",
+    "application/vnd.capelry.skill-source+json",
+)
+ARD_PACKAGE_TYPE_MEDIA_TYPES = {
+    "skill": ARD_SKILL_MEDIA_TYPES,
+}
+ARD_TRUST_STATE_FILTER = "metadata.com.capelry.trustState"
+ARD_VALIDATION_STATUS_FILTER = "metadata.com.capelry.validationStatus"
+ARD_SOURCE_REPOSITORY_FILTER = "metadata.com.capelry.sourceRepository"
+ARD_LEGACY_REF_FILTER = "metadata.com.capelry.legacyRef"
+ARD_TRUST_STATE_METADATA = "com.capelry.trustState"
+ARD_LEGACY_REF_METADATA = "com.capelry.legacyRef"
 
 TARGET_ROOTS = {
     "agents-project": ".agents/skills",
@@ -119,6 +133,19 @@ def eprint(*parts: object) -> None:
 
 def registry_base(args: argparse.Namespace) -> str:
     return (args.registry or os.environ.get("CAPELRY_REGISTRY_URL") or DEFAULT_REGISTRY).rstrip("/")
+
+
+def env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on", "legacy"}
+
+
+def selected_registry_api(args: argparse.Namespace) -> str:
+    explicit_api = getattr(args, "api", None)
+    if explicit_api:
+        return explicit_api
+    if env_truthy("CAPELRY_USE_LEGACY_API"):
+        return "legacy"
+    return "ard"
 
 
 def api_url(base: str, path: str) -> str:
@@ -215,6 +242,59 @@ def post_json(url: str, payload: dict[str, Any]) -> Any:
     except urllib.error.HTTPError as error:
         body_text = error.read().decode("utf-8", errors="replace")
         raise SystemExit(f"HTTP {error.code} for {url}\n{body_text}") from error
+    except urllib.error.URLError as error:
+        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
+
+
+def ard_error_message(url: str, status: int, body_text: str) -> str:
+    try:
+        payload = json.loads(body_text)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        code = payload.get("errorCode")
+        message = payload.get("message")
+        if isinstance(code, str) and isinstance(message, str):
+            return f"ARD {code} for {url}: {message}"
+        error = payload.get("error")
+        if isinstance(error, dict):
+            code = error.get("errorCode") or error.get("code")
+            message = error.get("message")
+            if isinstance(code, str) and isinstance(message, str):
+                return f"ARD {code} for {url}: {message}"
+    return f"HTTP {status} for {url}\n{body_text}"
+
+
+def fetch_ard_json(url: str) -> Any:
+    request = urllib.request.Request(url, headers={**http_headers(url), "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        body_text = error.read().decode("utf-8", errors="replace")
+        raise SystemExit(ard_error_message(url, error.code, body_text)) from error
+    except urllib.error.URLError as error:
+        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
+
+
+def post_ard_json(url: str, payload: dict[str, Any]) -> Any:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "User-Agent": "capelry-skill/1.1.0",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        body_text = error.read().decode("utf-8", errors="replace")
+        raise SystemExit(ard_error_message(url, error.code, body_text)) from error
     except urllib.error.URLError as error:
         raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
 
@@ -330,6 +410,193 @@ def search_capabilities(
     payload = fetch_json(api_url(base, f"/api/capabilities?{encoded}"))
     capabilities = payload.get("capabilities", [])
     return capabilities if isinstance(capabilities, list) else []
+
+
+def split_arg_values(values: list[str] | None) -> list[str]:
+    result: list[str] = []
+    for value in values or []:
+        result.extend(part.strip() for part in value.split(","))
+    return dedupe([part for part in result if part])
+
+
+def ard_media_types_for_package_type(package_type: str) -> list[str]:
+    normalized = package_type.strip().lower()
+    mapped = ARD_PACKAGE_TYPE_MEDIA_TYPES.get(normalized)
+    if mapped:
+        return list(mapped)
+    safe = re.sub(r"[^a-z0-9-]+", "-", normalized).strip("-")
+    if not safe:
+        return []
+    return [f"application/vnd.capelry.{safe}+zip", f"application/vnd.capelry.{safe}-source+json"]
+
+
+def add_ard_filter(filters: dict[str, list[str]], field: str, values: list[str] | str | None) -> None:
+    if values is None:
+        return
+    value_list = [values] if isinstance(values, str) else values
+    cleaned = [str(value).strip() for value in value_list if str(value).strip()]
+    if not cleaned:
+        return
+    filters[field] = dedupe(filters.get(field, []) + cleaned)
+
+
+def parse_ard_filter_arg(value: str) -> tuple[str, list[str]]:
+    field, separator, raw_value = value.partition("=")
+    if not separator or not field.strip() or not raw_value.strip():
+        raise SystemExit("ARD filters must use FIELD=VALUE, for example --filter tags=ard")
+    return field.strip(), split_arg_values([raw_value])
+
+
+def build_ard_filter(args: argparse.Namespace) -> dict[str, list[str]]:
+    filters: dict[str, list[str]] = {}
+    package_type = getattr(args, "package_type", None)
+    if package_type:
+        add_ard_filter(filters, "type", ard_media_types_for_package_type(package_type))
+    add_ard_filter(filters, "type", split_arg_values(getattr(args, "media_type", None)))
+    add_ard_filter(filters, "publisher", split_arg_values(getattr(args, "publisher", None)))
+    add_ard_filter(filters, ARD_TRUST_STATE_FILTER, split_arg_values(getattr(args, "trust_state", None)))
+    add_ard_filter(filters, ARD_VALIDATION_STATUS_FILTER, getattr(args, "status", None))
+    add_ard_filter(filters, ARD_SOURCE_REPOSITORY_FILTER, getattr(args, "source", None))
+    for raw_filter in getattr(args, "ard_filter", None) or []:
+        field, values = parse_ard_filter_arg(raw_filter)
+        add_ard_filter(filters, field, values)
+    return filters
+
+
+def ard_search_payload(args: argparse.Namespace, query: str, page_size: int | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {"query": {"text": query}, "federation": getattr(args, "federation", "none")}
+    filters = build_ard_filter(args)
+    if filters:
+        payload["query"]["filter"] = filters
+    clamped_page_size = clamp_api_search_limit(page_size)
+    if clamped_page_size is not None:
+        payload["pageSize"] = clamped_page_size
+    return payload
+
+
+def ard_search_entries(base: str, args: argparse.Namespace, query: str, page_size: int | None = None) -> list[dict[str, Any]]:
+    payload = post_ard_json(api_url(base, "/search"), ard_search_payload(args, query, page_size=page_size))
+    results = payload.get("results", []) if isinstance(payload, dict) else []
+    return results if isinstance(results, list) else []
+
+
+def ard_quote_filter_value(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def ard_agents_entries(base: str, *, field: str, value: str, page_size: int = 1) -> list[dict[str, Any]]:
+    params = urllib.parse.urlencode(
+        {
+            "filter": f"{field} = {ard_quote_filter_value(value)}",
+            "pageSize": str(clamp_api_search_limit(page_size) or 1),
+        }
+    )
+    payload = fetch_ard_json(api_url(base, f"/agents?{params}"))
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    return items if isinstance(items, list) else []
+
+
+def ard_metadata(entry: dict[str, Any]) -> dict[str, Any]:
+    metadata = entry.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def ard_trust_state(entry: dict[str, Any]) -> str | None:
+    metadata = ard_metadata(entry)
+    trust_state = metadata.get(ARD_TRUST_STATE_METADATA) or metadata.get(ARD_TRUST_STATE_FILTER) or entry.get("trustState")
+    return trust_state if isinstance(trust_state, str) and trust_state else None
+
+
+def ard_entry_media_type(entry: dict[str, Any]) -> str:
+    media_type = entry.get("type") or entry.get("mediaType")
+    return media_type if isinstance(media_type, str) and media_type else "?"
+
+
+def ard_entry_output(entry: dict[str, Any]) -> dict[str, Any]:
+    metadata = ard_metadata(entry)
+    output = {
+        "identifier": entry.get("identifier"),
+        "displayName": entry.get("displayName"),
+        "version": entry.get("version"),
+        "mediaType": ard_entry_media_type(entry),
+        "description": entry.get("description"),
+        "score": entry.get("score"),
+        "source": entry.get("source"),
+        "trustState": ard_trust_state(entry),
+        "legacyRef": metadata.get(ARD_LEGACY_REF_METADATA) or metadata.get(ARD_LEGACY_REF_FILTER),
+    }
+    return {key: value for key, value in output.items() if value is not None}
+
+
+def print_ard_entries(entries: list[dict[str, Any]]) -> None:
+    for entry in entries:
+        identifier = entry.get("identifier") or "?"
+        display_name = entry.get("displayName") or ""
+        version = entry.get("version") or "?"
+        media_type = ard_entry_media_type(entry)
+        print(f"{identifier}@{version} [{media_type}] {display_name}")
+        metadata = []
+        if entry.get("score") is not None:
+            metadata.append(f"score={entry['score']}")
+        if entry.get("source"):
+            metadata.append(f"source={entry['source']}")
+        trust_state = ard_trust_state(entry)
+        if trust_state:
+            metadata.append(f"trust={trust_state}")
+        if metadata:
+            print("  " + " ".join(str(item) for item in metadata))
+        description = entry.get("description")
+        if isinstance(description, str) and description:
+            print(f"  {description}")
+
+
+def ard_resolution_field(value: str) -> str:
+    return "identifier" if value.startswith("urn:ai:") else ARD_LEGACY_REF_FILTER
+
+
+def ard_detail_summary(entry: dict[str, Any], install_target: str | None = None) -> dict[str, Any]:
+    metadata = ard_metadata(entry)
+    identifier = entry.get("identifier") if isinstance(entry.get("identifier"), str) else "?"
+    legacy_ref = metadata.get(ARD_LEGACY_REF_METADATA) or metadata.get(ARD_LEGACY_REF_FILTER)
+    detail_url = metadata.get("com.capelry.detailUrl") or metadata.get("metadata.com.capelry.detailUrl")
+    source = entry.get("source") or metadata.get("com.capelry.sourceRepository") or metadata.get(ARD_SOURCE_REPOSITORY_FILTER)
+    output = {
+        "identifier": identifier,
+        "name": identifier,
+        "displayName": entry.get("displayName") or identifier,
+        "version": entry.get("version") or "?",
+        "mediaType": ard_entry_media_type(entry),
+        "summary": entry.get("description") or entry.get("displayName") or "",
+        "source": source,
+        "page": detail_url if isinstance(detail_url, str) and detail_url else None,
+        "score": entry.get("score"),
+        "trustState": ard_trust_state(entry),
+        "legacyRef": legacy_ref if isinstance(legacy_ref, str) and legacy_ref else None,
+    }
+    if install_target and output["legacyRef"]:
+        output["installCommand"] = install_snippet(str(output["legacyRef"]), install_target)
+    return {key: value for key, value in output.items() if value is not None}
+
+
+def print_ard_detail_summaries(summaries: list[dict[str, Any]]) -> None:
+    for index, item in enumerate(summaries, start=1):
+        print(f"{index}. {item['identifier']}@{item.get('version', '?')}")
+        if item.get("displayName") and item["displayName"] != item["identifier"]:
+            print(f"   name: {item['displayName']}")
+        print(f"   type: {item.get('mediaType', '?')}")
+        print(f"   summary: {item.get('summary') or ''}")
+        if item.get("source"):
+            print(f"   source: {item['source']}")
+        if item.get("page"):
+            print(f"   page: {item['page']}")
+        if item.get("score") is not None:
+            print(f"   score: {item['score']}")
+        if item.get("trustState"):
+            print(f"   trust: {item['trustState']}")
+        if item.get("legacyRef"):
+            print(f"   legacy ref: {item['legacyRef']}")
+        if item.get("installCommand"):
+            print(f"   install: {item['installCommand']}")
 
 
 def tokenize(value: str) -> list[str]:
@@ -588,10 +855,50 @@ def collect_search_results(base: str, args: argparse.Namespace, queries: list[st
     return filter_capabilities(list(capabilities_by_ref.values()), args)
 
 
+def collect_ard_search_results(base: str, args: argparse.Namespace, queries: list[str], per_query_limit: int | None = None) -> list[dict[str, Any]]:
+    entries_by_identifier: dict[str, dict[str, Any]] = {}
+    for query in queries:
+        for entry in ard_search_entries(base, args, query, page_size=per_query_limit):
+            identifier = entry.get("identifier")
+            if not isinstance(identifier, str) or not identifier:
+                continue
+            if identifier not in entries_by_identifier:
+                copy = dict(entry)
+                copy["_capelryMatchedQueries"] = []
+                entries_by_identifier[identifier] = copy
+            entries_by_identifier[identifier]["_capelryMatchedQueries"].append(query)
+    return list(entries_by_identifier.values())
+
+
 def command_search(args: argparse.Namespace) -> None:
     base = registry_base(args)
     queries = expanded_queries(args.query) if args.expand else [args.query]
     display_limit = result_limit(args.limit)
+
+    if selected_registry_api(args) == "ard":
+        entries = collect_ard_search_results(base, args, queries, per_query_limit=display_limit)
+        limited_entries = entries[:display_limit]
+        if args.json_output:
+            print_json(
+                {
+                    "registry": base,
+                    "api": "ard",
+                    "query": args.query,
+                    "queries": queries,
+                    "request": ard_search_payload(args, args.query, page_size=display_limit),
+                    "count": len(entries),
+                    "limit": display_limit,
+                    "suggestedQueries": expanded_queries(args.query)[1:],
+                    "entries": [ard_entry_output(entry) for entry in limited_entries],
+                }
+            )
+            return
+        if not entries:
+            print("No ARD entries found.")
+            return
+        print_ard_entries(limited_entries)
+        return
+
     api_limit = clamp_api_search_limit(max(display_limit, 25))
     filtered = collect_search_results(base, args, queries, per_query_limit=api_limit)
     limited = filtered[:display_limit]
@@ -645,6 +952,17 @@ def command_search(args: argparse.Namespace) -> None:
 
 def command_info(args: argparse.Namespace) -> None:
     base = registry_base(args)
+    if selected_registry_api(args) == "ard":
+        entries = ard_agents_entries(base, field=ard_resolution_field(args.ref), value=args.ref, page_size=1)
+        if not entries:
+            raise SystemExit(f"No ARD entry found for {args.ref}")
+        entry = entries[0]
+        if args.json_output:
+            print_json({"registry": base, "api": "ard", "entry": ard_entry_output(entry)})
+            return
+        print_ard_entries([entry])
+        return
+
     capability = capability_detail(base, args.ref)
     latest = capability.get("latestVersion") or {}
     source = capability.get("source") or {}
@@ -710,6 +1028,33 @@ def command_discover(args: argparse.Namespace) -> None:
     queries = discover_queries(args.query, args.extra_query, expand=not args.no_expand)
     top = min(max(args.top, 1), 25)
     api_limit = clamp_api_search_limit(max(args.search_limit, top, 25))
+
+    if selected_registry_api(args) == "ard":
+        entries = collect_ard_search_results(base, args, queries, per_query_limit=api_limit)
+        shortlist = entries[:top]
+        summaries = [ard_detail_summary(entry, args.install_snippet) for entry in shortlist]
+        if args.json_output:
+            print_json(
+                {
+                    "registry": base,
+                    "api": "ard",
+                    "query": args.query,
+                    "queries": queries,
+                    "filters": build_ard_filter(args),
+                    "entries": [ard_entry_output(entry) for entry in shortlist],
+                    "shortlist": summaries,
+                }
+            )
+            return
+
+        if not shortlist:
+            print("No ARD entries found.")
+            return
+
+        print("Queries: " + "; ".join(queries))
+        print_ard_detail_summaries(summaries)
+        return
+
     filtered = collect_search_results(base, args, queries, per_query_limit=api_limit)
     refs = [capability_ref(item) for item in filtered[:top]]
 
@@ -723,6 +1068,7 @@ def command_discover(args: argparse.Namespace) -> None:
         print_json(
             {
                 "registry": base,
+                "api": "legacy",
                 "query": args.query,
                 "queries": queries,
                 "filters": {
@@ -990,7 +1336,189 @@ def installed_skill_name(dest: Path) -> str:
     return match.group(1) if match else dest.name
 
 
-def command_install(args: argparse.Namespace) -> None:
+def normalize_sha256(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized.startswith("sha256:"):
+        normalized = normalized.split(":", 1)[1]
+    return normalized if re.fullmatch(r"[a-f0-9]{64}", normalized) else None
+
+
+def verify_archive_checksum(archive: bytes, expected: str | None) -> str | None:
+    checksum = hashlib.sha256(archive).hexdigest()
+    normalized_expected = normalize_sha256(expected)
+    if normalized_expected and checksum != normalized_expected:
+        raise SystemExit(f"Archive SHA-256 mismatch: expected {normalized_expected}, got {checksum}")
+    return checksum
+
+
+def ard_metadata_string(entry: dict[str, Any], *keys: str) -> str | None:
+    metadata = ard_metadata(entry)
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def ard_archive_url(entry: dict[str, Any]) -> str | None:
+    value = ard_metadata_string(entry, "com.capelry.archiveUrl", "metadata.com.capelry.archiveUrl")
+    if value:
+        return value
+    url = entry.get("url")
+    return url if isinstance(url, str) and url else None
+
+
+def ard_archive_checksum(entry: dict[str, Any]) -> str | None:
+    value = ard_metadata_string(
+        entry,
+        "com.capelry.archiveChecksumSha256",
+        "metadata.com.capelry.archiveChecksumSha256",
+        "com.capelry.checksumSha256",
+        "metadata.com.capelry.checksumSha256",
+    )
+    if value:
+        return value
+    checksum = entry.get("checksumSha256")
+    return checksum if isinstance(checksum, str) else None
+
+
+def ard_legacy_ref(entry: dict[str, Any]) -> str | None:
+    value = ard_metadata_string(entry, ARD_LEGACY_REF_METADATA, ARD_LEGACY_REF_FILTER)
+    return value if value and "/" in value else None
+
+
+def slugify_install_name(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
+    return slug or "capelry-entry"
+
+
+def ard_entry_install_name(entry: dict[str, Any], requested_ref: str) -> str:
+    legacy_ref = ard_legacy_ref(entry)
+    if legacy_ref:
+        return legacy_ref.split("/", 1)[1]
+    identifier = entry.get("identifier")
+    if isinstance(identifier, str) and identifier:
+        return slugify_install_name(identifier.rsplit(":", 1)[-1].rsplit("/", 1)[-1])
+    display_name = entry.get("displayName")
+    if isinstance(display_name, str) and display_name:
+        return slugify_install_name(display_name)
+    return slugify_install_name(requested_ref)
+
+
+def source_descriptor_value(descriptor: dict[str, Any], entry: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = descriptor.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ard_metadata_string(entry, *keys)
+
+
+def download_archive_source_path(archive_url: str, source_path_value: str, dest: Path, force: bool) -> None:
+    source_path_value = normalize_github_source_path(source_path_value)
+    archive = fetch_bytes(archive_url)
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        rel_members = github_archive_rel_members(zf)
+        skill_marker = f"{source_path_value}/SKILL.md" if source_path_value else "SKILL.md"
+        if skill_marker not in rel_members:
+            display_path = source_path_value or "."
+            raise SystemExit(f"Source archive did not contain source path: {display_path}")
+        prepare_dest(dest, force)
+        prefix = f"{source_path_value}/" if source_path_value else ""
+        for rel, member in rel_members.items():
+            if prefix and not rel.startswith(prefix):
+                continue
+            output_rel = rel[len(prefix) :] if prefix else rel
+            if not output_rel:
+                continue
+            out = dest / output_rel
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(zf.read(member))
+    if not (dest / "SKILL.md").exists():
+        shutil.rmtree(dest, ignore_errors=True)
+        raise SystemExit("Source archive install completed but did not produce SKILL.md")
+
+
+def ard_source_descriptor(entry: dict[str, Any]) -> dict[str, Any]:
+    data = entry.get("data")
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def print_ard_trust_summary(entry: dict[str, Any]) -> None:
+    print(f"ARD entry: {entry.get('identifier', '?')}")
+    print(f"type: {ard_entry_media_type(entry)}")
+    trust_state = ard_trust_state(entry)
+    if trust_state:
+        print(f"trust: {trust_state}")
+    checksum = ard_archive_checksum(entry)
+    if checksum:
+        print(f"checksum: {checksum}")
+    trust_manifest = entry.get("trustManifest")
+    if isinstance(trust_manifest, dict):
+        identity = trust_manifest.get("identity")
+        identity_type = trust_manifest.get("identityType")
+        if identity:
+            suffix = f" ({identity_type})" if identity_type else ""
+            print(f"trust identity: {identity}{suffix}")
+        provenance = trust_manifest.get("provenance")
+        if isinstance(provenance, list):
+            for item in provenance[:3]:
+                if isinstance(item, dict):
+                    relation = item.get("relation") or "provenance"
+                    source_id = item.get("sourceId") or item.get("url") or item.get("source")
+                    if source_id:
+                        print(f"provenance: {relation} {source_id}")
+
+
+def resolve_ard_entry_for_install(base: str, ref: str) -> dict[str, Any]:
+    entries = ard_agents_entries(base, field=ard_resolution_field(ref), value=ref, page_size=1)
+    if not entries:
+        raise SystemExit(f"No ARD entry found for {ref}")
+    return entries[0]
+
+
+def install_ard_zip_entry(entry: dict[str, Any], dest: Path, force: bool) -> tuple[str, str]:
+    archive_url = ard_archive_url(entry)
+    if not archive_url:
+        raise SystemExit("ARD zip entry did not include an archive URL")
+    archive = fetch_bytes(archive_url)
+    checksum = verify_archive_checksum(archive, ard_archive_checksum(entry))
+    if not extract_skill_archive(archive, dest, force):
+        raise SystemExit("ARD zip archive did not contain SKILL.md")
+    return "ARD skill zip", checksum
+
+
+def install_ard_source_entry(entry: dict[str, Any], dest: Path, force: bool) -> str:
+    descriptor = ard_source_descriptor(entry)
+    archive_url = source_descriptor_value(descriptor, entry, "archiveUrl", "com.capelry.sourceArchiveUrl")
+    source_path_value = source_descriptor_value(descriptor, entry, "path", "sourcePath", "com.capelry.sourcePath", "metadata.com.capelry.sourcePath") or ""
+    ref = source_descriptor_value(descriptor, entry, "ref", "sourceRef", "defaultBranch", "com.capelry.sourceRef", "metadata.com.capelry.sourceRef") or "main"
+    repository = source_descriptor_value(descriptor, entry, "repository", "sourceRepository", "com.capelry.sourceRepository", "metadata.com.capelry.sourceRepository")
+
+    if archive_url:
+        download_archive_source_path(archive_url, source_path_value, dest, force)
+        return f"ARD source archive descriptor at {ref}"
+
+    if repository:
+        parts = github_parts(repository)
+        if parts:
+            owner, repo = parts
+            download_github_archive_path(owner, repo, source_path_value, ref, dest, force)
+            return f"ARD GitHub source descriptor at {ref}"
+
+    raise SystemExit("ARD source entry did not include a supported GitHub repository or source archive descriptor")
+
+
+def unsupported_ard_install_message(entry: dict[str, Any]) -> str:
+    url = entry.get("url")
+    guidance = f" Open/connect manually: {url}" if isinstance(url, str) and url else " Inspect the entry and connect with its native protocol."
+    return f"Unsupported ARD media type for automatic install: {ard_entry_media_type(entry)}.{guidance}"
+
+
+def command_install_legacy(args: argparse.Namespace) -> None:
     base = registry_base(args)
     namespace, name, version_in_ref = parse_ref(args.ref)
     capability = capability_detail(base, args.ref)
@@ -1014,6 +1542,7 @@ def command_install(args: argparse.Namespace) -> None:
         print_json(
             {
                 "registry": base,
+                "api": "legacy",
                 "ref": f"{namespace}/{name}",
                 "version": version,
                 "destination": str(dest),
@@ -1025,6 +1554,50 @@ def command_install(args: argparse.Namespace) -> None:
         return
 
     print(f"Installed {namespace}/{name}@{version} to {dest}")
+    print(f"source: {installed_from}")
+    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:" + skill_name)
+
+
+def command_install(args: argparse.Namespace) -> None:
+    if selected_registry_api(args) == "legacy":
+        command_install_legacy(args)
+        return
+
+    base = registry_base(args)
+    entry = resolve_ard_entry_for_install(base, args.ref)
+    media_type = ard_entry_media_type(entry)
+    dest = resolve_install_dest(args, ard_entry_install_name(entry, args.ref))
+    if not args.json_output:
+        print_ard_trust_summary(entry)
+
+    checksum: str | None = None
+    if media_type == "application/vnd.capelry.skill+zip":
+        installed_from, checksum = install_ard_zip_entry(entry, dest, args.force)
+    elif media_type == "application/vnd.capelry.skill-source+json":
+        installed_from = install_ard_source_entry(entry, dest, args.force)
+    else:
+        raise SystemExit(unsupported_ard_install_message(entry))
+
+    skill_name = installed_skill_name(dest)
+    result = {
+        "registry": base,
+        "api": "ard",
+        "ref": args.ref,
+        "identifier": entry.get("identifier"),
+        "mediaType": media_type,
+        "trustState": ard_trust_state(entry),
+        "destination": str(dest),
+        "installedFrom": installed_from,
+        "skillName": skill_name,
+        "next": f"reload or restart your agent; in Pi run /reload and then /skill:{skill_name}",
+    }
+    if checksum:
+        result["checksumSha256"] = checksum
+    if args.json_output:
+        print_json(result)
+        return
+
+    print(f"Installed {entry.get('identifier', args.ref)} to {dest}")
     print(f"source: {installed_from}")
     print("Next: reload or restart your agent. In Pi, run /reload and then /skill:" + skill_name)
 
@@ -1379,7 +1952,17 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=20)
     search.add_argument("--expand", action="store_true", help="Search related terms when an exact phrase is too narrow")
+    search.add_argument(
+        "--api",
+        choices=("legacy", "ard"),
+        help="Registry API to use (default: ard; CAPELRY_USE_LEGACY_API=1 selects legacy)",
+    )
     search.add_argument("--type", dest="package_type", help="Filter by package type, e.g. skill, agent, prompt")
+    search.add_argument("--media-type", action="append", help="ARD media type filter; repeat or comma-separate values")
+    search.add_argument("--publisher", action="append", help="ARD publisher filter; repeat or comma-separate values")
+    search.add_argument("--trust-state", action="append", help="ARD trust-state filter; repeat or comma-separate values")
+    search.add_argument("--filter", dest="ard_filter", action="append", help="Generic ARD filter FIELD=VALUE; repeat or comma-separate values")
+    search.add_argument("--federation", choices=("none", "referrals", "auto"), default="none", help="ARD federation mode")
     search.add_argument("--status", help="Filter by latest validation status, e.g. passed")
     search.add_argument("--source", help="Filter by source repository, e.g. github/awesome-copilot")
     search.add_argument("--domain", help="Filter by derived domain facet, e.g. devops, docker, sre")
@@ -1395,7 +1978,17 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--top", type=int, default=5, help="Number of top refs to bulk-inspect (max 25)")
     discover.add_argument("--search-limit", type=int, default=10, help="Per-query search limit before dedupe")
     discover.add_argument("--no-expand", action="store_true", help="Disable built-in related-query expansion")
+    discover.add_argument(
+        "--api",
+        choices=("legacy", "ard"),
+        help="Registry API to use (default: ard; CAPELRY_USE_LEGACY_API=1 selects legacy)",
+    )
     discover.add_argument("--type", dest="package_type", default="skill", help="Filter by package type (default: skill)")
+    discover.add_argument("--media-type", action="append", help="ARD media type filter; repeat or comma-separate values")
+    discover.add_argument("--publisher", action="append", help="ARD publisher filter; repeat or comma-separate values")
+    discover.add_argument("--trust-state", action="append", help="ARD trust-state filter; repeat or comma-separate values")
+    discover.add_argument("--filter", dest="ard_filter", action="append", help="Generic ARD filter FIELD=VALUE; repeat or comma-separate values")
+    discover.add_argument("--federation", choices=("none", "referrals", "auto"), default="none", help="ARD federation mode")
     discover.add_argument("--status", default="passed", help="Filter by validation status (default: passed)")
     discover.add_argument("--source", help="Filter by source repository, e.g. github/awesome-copilot")
     discover.add_argument("--domain", help="Filter by derived domain facet, e.g. devops, docker, sre")
@@ -1404,8 +1997,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_json_argument(discover)
     discover.set_defaults(func=command_discover)
 
-    info = subparsers.add_parser("info", help="Show capability details")
-    info.add_argument("ref", help="namespace/name")
+    info = subparsers.add_parser("info", help="Show capability or ARD entry details")
+    info.add_argument("ref", help="namespace/name or urn:ai:...")
+    info.add_argument(
+        "--api",
+        choices=("legacy", "ard"),
+        help="Registry API to use (default: ard; CAPELRY_USE_LEGACY_API=1 selects legacy)",
+    )
     add_install_snippet_argument(info)
     add_json_argument(info)
     info.set_defaults(func=command_info)
@@ -1420,9 +2018,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_json_argument(bulk_info)
     bulk_info.set_defaults(func=command_bulk_info)
 
-    install = subparsers.add_parser("install", help="Install a skill capability")
-    install.add_argument("ref", help="namespace/name or namespace/name@version")
-    install.add_argument("--version", help="Version override")
+    install = subparsers.add_parser("install", help="Install a supported skill from an ARD entry or legacy capability")
+    install.add_argument("ref", help="urn:ai:... or legacy namespace/name; namespace/name@version only with --api legacy")
+    install.add_argument(
+        "--api",
+        choices=("legacy", "ard"),
+        help="Registry API to use (default: ard; CAPELRY_USE_LEGACY_API=1 selects legacy)",
+    )
+    install.add_argument("--version", help="Legacy version override")
     install.add_argument("--target", choices=sorted(TARGET_ROOTS), default="agents-project")
     install.add_argument("--dest", help="Exact destination directory")
     install.add_argument("--name", help="Install directory name override")

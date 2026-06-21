@@ -13,6 +13,7 @@ spec:
     readme: SKILL.md
     additional:
       - BOOTSTRAP.md
+      - ai-catalog.json
   compatibility:
     - target: pi
       versionRange: "*"
@@ -43,6 +44,9 @@ spec:
   assets:
     - path: BOOTSTRAP.md
       mediaType: text/markdown
+      required: true
+    - path: ai-catalog.json
+      mediaType: application/ai-catalog+json
       required: true
     - path: agents/openai.yaml
       mediaType: text/yaml

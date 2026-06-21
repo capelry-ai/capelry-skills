@@ -1,0 +1,53 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "Capelry Skills",
+    "identifier": "https://github.com/capelry-ai/capelry-skills",
+    "documentationUrl": "https://github.com/capelry-ai/capelry-skills/blob/main/README.md"
+  },
+  "entries": [
+    {
+      "identifier": "urn:ai:github.com:capelry-ai:capelry-skills:capelry",
+      "displayName": "Capelry ARD Client Skill",
+      "type": "application/vnd.capelry.skill-source+json",
+      "data": {
+        "repository": "https://github.com/capelry-ai/capelry-skills",
+        "path": "skills/capelry",
+        "ref": "main",
+        "archiveUrl": "https://codeload.github.com/capelry-ai/capelry-skills/zip/main"
+      },
+      "description": "Reference ARD discovery and install client for agent coding environments. Bootstraps from GitHub source, searches Capelry with ARD by default, inspects trust metadata, and installs supported skill media types.",
+      "tags": ["ard", "ai-catalog", "capelry", "skill", "registry", "bootstrap"],
+      "capabilities": ["search", "discover", "inspect", "install", "bootstrap", "self-update"],
+      "representativeQueries": [
+        "search an ARD registry from an agent",
+        "install a Capelry skill into Pi",
+        "bootstrap capability discovery into a fresh coding project"
+      ],
+      "version": "1.1.0",
+      "updatedAt": "2026-06-21T00:00:00Z",
+      "metadata": {
+        "com.capelry.packageType": "skill",
+        "com.capelry.legacyRef": "capelry/capelry",
+        "com.capelry.trustState": "source-hosted",
+        "com.capelry.sourceRepository": "https://github.com/capelry-ai/capelry-skills",
+        "com.capelry.sourcePath": "skills/capelry",
+        "com.capelry.installTargets": "agents-project,pi-project,claude-project,codex-project"
+      },
+      "trustManifest": {
+        "identity": "urn:ai:github.com:capelry-ai:capelry-skills:capelry",
+        "identityType": "other",
+        "provenance": [
+          {
+            "relation": "publishedFrom",
+            "sourceId": "https://github.com/capelry-ai/capelry-skills"
+          },
+          {
+            "relation": "sourcePath",
+            "sourceId": "skills/capelry"
+          }
+        ]
+      }
+    }
+  ]
+}

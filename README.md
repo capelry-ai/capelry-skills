@@ -41,6 +41,7 @@ This repository contains the **Capelry registry skill**: a portable Agent Skill 
   - [Direct CLI](https://github.com/capelry-ai/capelry-skills#direct-cli)
 - [Version and self-update](https://github.com/capelry-ai/capelry-skills#version-and-self-update)
 - [Release versioning](https://github.com/capelry-ai/capelry-skills#release-versioning)
+- [Testing and CI](https://github.com/capelry-ai/capelry-skills#testing-and-ci)
 - [Registry URL](https://github.com/capelry-ai/capelry-skills#registry-url)
 - [Repository tour](https://github.com/capelry-ai/capelry-skills#repository-tour)
 - [Install targets](https://github.com/capelry-ai/capelry-skills#install-targets)
@@ -191,10 +192,13 @@ python3 .agents/skills/capelry/scripts/capelry.py info openai/skill-creator --in
 python3 .agents/skills/capelry/scripts/capelry.py install openai/skill-creator --target agents-project
 ```
 
-Agent-friendly discovery output is available with filters and JSON. `discover` batches related searches and calls the Capelry bulk detail API for the shortlist:
+Agent-friendly discovery output is available with filters and JSON. `search`, `discover`, `info`, and supported `install` flows use ARD endpoints by default (`POST /search` and `GET /agents`), while legacy Capelry API reads/installs require `--api legacy` or `CAPELRY_USE_LEGACY_API=1` during the migration window:
 
 ```text
 python3 .pi/skills/capelry/scripts/capelry.py discover "production readiness" --top 5 --install-snippet pi-project --json
+python3 .pi/skills/capelry/scripts/capelry.py search "skill creator" --type skill --trust-state source-hosted --json
+python3 .pi/skills/capelry/scripts/capelry.py install openai/skill-creator --target pi-project
+python3 .pi/skills/capelry/scripts/capelry.py search "skill creator" --api legacy --type skill --status passed --json
 ```
 
 Check and update the installed Capelry skill itself:
@@ -227,9 +231,22 @@ Recommended release flow:
 
 1. Bump `skills/capelry/capability.yaml` and docs/package examples to the new `X.X.X` version.
 2. Validate the CLI: `python3 -m py_compile skills/capelry/scripts/capelry.py` and `python3 skills/capelry/scripts/capelry.py version --ref vX.X.X` after the tag exists.
-3. Package from `skills/capelry`: `python3 -m zipfile -c capelry-X.X.X.zip capability.yaml SKILL.md BOOTSTRAP.md agents scripts`.
+3. Package from `skills/capelry`: `python3 -m zipfile -c capelry-X.X.X.zip capability.yaml SKILL.md BOOTSTRAP.md ai-catalog.json agents scripts`.
 4. Commit, tag, and push: `git tag -a vX.X.X -m "vX.X.X" && git push origin main vX.X.X`.
 5. Create the GitHub release for `vX.X.X`, then smoke-test a 1.1.0+ install with `self-update --ref vX.X.X --yes`. For the first self-update release, pre-1.1.0 installs must be re-bootstrapped once.
+
+## Testing and CI
+
+The Capelry skill scripts are validated with a stdlib-only Python harness and GitHub Actions CI.
+
+Run the same checks locally:
+
+```text
+python3 -m unittest discover -s tests
+python3 -m py_compile skills/capelry/scripts/capelry.py skills/capelry/scripts/bootstrap.py
+```
+
+The fixture HTTP server in `tests/test_capelry_scripts.py` emulates legacy capability endpoints plus ARD `/search` and `/agents` so the client can evolve without third-party Python test dependencies.
 
 ## Registry URL
 
@@ -263,7 +280,8 @@ Useful links:
 | [`capelry-mark.svg`](https://github.com/capelry-ai/capelry-skills/blob/main/capelry-mark.svg) | Friendly Capelry mark. |
 | [`skills/capelry/BOOTSTRAP.md`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/BOOTSTRAP.md) | Start here: the agent-facing bootstrap prompt. |
 | [`skills/capelry/SKILL.md`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/SKILL.md) | The actual skill instructions agents load. |
-| [`skills/capelry/capability.yaml`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/capability.yaml) | Capelry package manifest. |
+| [`skills/capelry/capability.yaml`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/capability.yaml) | Legacy Capelry package manifest. |
+| [`skills/capelry/ai-catalog.json`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/ai-catalog.json) | ARD/AI Catalog self-entry for the Capelry skill. |
 | [`skills/capelry/agents/openai.yaml`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/agents/openai.yaml) | UI/display metadata. |
 | [`skills/capelry/scripts/bootstrap.py`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/scripts/bootstrap.py) | OS-neutral GitHub-source bootstrap installer. |
 | [`skills/capelry/scripts/capelry.py`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/scripts/capelry.py) | Small stdlib-only registry and self-update CLI. |
