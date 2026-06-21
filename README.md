@@ -50,10 +50,20 @@ This repository contains the **Capelry registry skill**: a portable Agent Skill 
 
 ## Quick start: point your agent here
 
-Copy this into your agent:
+Most users should install Capelry into the current project so each repo controls its own agent skills.
+
+Copy this into your agent to install into this project:
 
 ```text
 Read and follow https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/BOOTSTRAP.md to install the Capelry skill into this project. Choose the best project-local target for this coding agent using the bootstrap guidance; if unsure, use the portable Agent Skills default.
+```
+
+If you want Capelry available across all projects on this machine, use a global install instead.
+
+Copy this into your agent to install globally:
+
+```text
+Read and follow https://github.com/capelry-ai/capelry-skills/raw/main/skills/capelry/BOOTSTRAP.md to install the Capelry skill globally for this coding agent. Choose the best global target using the bootstrap guidance; if unsure, use the portable global Agent Skills target at ~/.agents/skills/capelry.
 ```
 
 That is all that is needed. The bootstrap prompt installs the skill from GitHub source, then the installed skill uses Capelry.com for registry operations. It is designed for fresh projects and is intentionally boring in the best way:
@@ -74,7 +84,7 @@ Once installed, the Capelry skill helps your agent:
 | Superpower | What it means |
 | --- | --- |
 | 🔎 Search | Find relevant capabilities from Capelry. |
-| 🧭 Discover | Batch related searches and bulk-inspect top refs into an actionable shortlist. |
+| 🧭 Discover | Batch related searches into an actionable shortlist. |
 | 📖 Inspect | Read metadata, versions, source info, and checksums before installing. |
 | 📦 Install | Add skills into project-local or global skill directories. |
 | ⬆️ Self-update | Check the installed Capelry skill version and replace it from the latest GitHub `vX.X.X` release/tag. |
