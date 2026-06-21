@@ -154,7 +154,7 @@ def api_url(base: str, path: str) -> str:
     return f"{base}{path if path.startswith('/') else '/' + path}"
 
 
-def http_headers(url: str, *, user_agent: str = "capelry-skill/1.1.0") -> dict[str, str]:
+def http_headers(url: str, *, user_agent: str = "capelry-skill/2.0.0") -> dict[str, str]:
     headers = {"User-Agent": user_agent}
     parsed = urllib.parse.urlparse(url)
     if parsed.netloc.lower() == "api.github.com":
@@ -232,7 +232,7 @@ def post_json(url: str, payload: dict[str, Any]) -> Any:
         url,
         data=body,
         headers={
-            "User-Agent": "capelry-skill/1.1.0",
+            "User-Agent": "capelry-skill/2.0.0",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
@@ -295,7 +295,7 @@ def post_ard_json(url: str, payload: dict[str, Any]) -> Any:
         url,
         data=body,
         headers={
-            "User-Agent": "capelry-skill/1.1.0",
+            "User-Agent": "capelry-skill/2.0.0",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
@@ -2090,7 +2090,7 @@ def build_parser() -> argparse.ArgumentParser:
         aliases=["check-update"],
         help="Show this Capelry skill version and the latest GitHub vX.X.X release/tag",
     )
-    version.add_argument("--ref", help="Compare against a specific GitHub ref or tag, e.g. v1.1.0")
+    version.add_argument("--ref", help="Compare against a specific GitHub ref or tag, e.g. v2.0.0")
     version.add_argument("--check", action="store_true", help="Exit with code 1 when an update is available")
     add_json_argument(version)
     version.set_defaults(func=command_version)
@@ -2100,7 +2100,7 @@ def build_parser() -> argparse.ArgumentParser:
         aliases=["update", "upgrade"],
         help="Replace this installed Capelry skill with the latest GitHub vX.X.X release/tag",
     )
-    self_update.add_argument("--ref", help="Install a specific GitHub ref or tag, e.g. v1.1.0")
+    self_update.add_argument("--ref", help="Install a specific GitHub ref or tag, e.g. v2.0.0")
     self_update.add_argument("--yes", "-y", action="store_true", help="Skip confirmation for non-interactive updates")
     self_update.add_argument("--dry-run", action="store_true", help="Show what would change without writing files")
     self_update.add_argument("--force", action="store_true", help="Reinstall even when the remote ref is not newer")
