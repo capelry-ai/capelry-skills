@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CAPELRY_SCRIPT = ROOT / "skills" / "capelry" / "scripts" / "capelry.py"
 BOOTSTRAP_SCRIPT = ROOT / "skills" / "capelry" / "scripts" / "bootstrap.py"
 SELF_CATALOG = ROOT / "skills" / "capelry" / "ai-catalog.json"
+SELF_CAPABILITY = ROOT / "skills" / "capelry" / "capability.yaml"
 
 
 def clean_env(**overrides: str) -> dict[str, str]:
@@ -634,9 +635,18 @@ class CapelryScriptTests(unittest.TestCase):
         catalog = json.loads(SELF_CATALOG.read_text(encoding="utf-8"))
         self.assertEqual(catalog["specVersion"], "1.0")
         self.assertEqual(catalog["host"]["identifier"], "https://github.com/capelry-ai/capelry-skills")
+        manifest = SELF_CAPABILITY.read_text(encoding="utf-8")
+        manifest_version = next(
+            line.split(":", 1)[1].strip()
+            for line in manifest.splitlines()
+            if line.strip().startswith("version:")
+        )
+        self.assertEqual(manifest_version, "2.0.1")
+        self.assertIn(f"capelry-{manifest_version}.zip", manifest)
         entries = catalog["entries"]
         self.assertEqual(len(entries), 1)
         entry = entries[0]
+        self.assertEqual(entry["version"], manifest_version)
         for field in ("identifier", "displayName", "type", "description", "metadata", "trustManifest"):
             self.assertIn(field, entry)
         self.assertTrue(entry["identifier"].startswith("urn:ai:"))

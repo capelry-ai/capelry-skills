@@ -24,7 +24,7 @@
         "install a Capelry skill into Pi",
         "bootstrap capability discovery into a fresh coding project"
       ],
-      "version": "2.0.0",
+      "version": "2.0.1",
       "updatedAt": "2026-06-21T00:00:00Z",
       "metadata": {
         "com.capelry.packageType": "skill",

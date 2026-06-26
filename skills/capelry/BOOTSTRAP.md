@@ -88,7 +88,7 @@ Useful options:
 
 ```text
 python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref main --target agents-project
-python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref v2.0.0 --target agents-project  # example published release tag
+python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref v2.0.1 --target agents-project  # example published release tag
 python3 scripts/bootstrap.py --target pi-project
 python3 scripts/bootstrap.py --target claude-project
 python3 scripts/bootstrap.py --target codex-project

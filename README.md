@@ -228,14 +228,14 @@ python3 <capelry-skill-dir>/scripts/capelry.py version
 python3 <capelry-skill-dir>/scripts/capelry.py version --check
 python3 <capelry-skill-dir>/scripts/capelry.py self-update --dry-run
 python3 <capelry-skill-dir>/scripts/capelry.py self-update --yes
-python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref v2.0.0 --yes
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref v2.0.1 --yes
 ```
 
 Self-update is opt-in and filesystem-writing: it prompts in interactive terminals and requires `--yes` for non-interactive runs. It is intended for installed skill copies; use `git` to update this source checkout unless you explicitly pass `--allow-source-checkout`. Existing pre-1.1.0 installs need one manual re-bootstrap/reinstall to get the `self-update` command. Reload or restart your agent afterward. If GitHub API rate limits are hit, set `CAPELRY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`.
 
 ## Release versioning
 
-Release GitHub tags and releases as stable `vX.X.X` refs, for example `v2.0.0`. Keep `skills/capelry/capability.yaml` at the matching registry package version without the `v` prefix, for example `2.0.0`.
+Release GitHub tags and releases as stable `vX.X.X` refs, for example `v2.0.1`. Keep `skills/capelry/capability.yaml` at the matching registry package version without the `v` prefix, for example `2.0.1`.
 
 Recommended release flow:
 

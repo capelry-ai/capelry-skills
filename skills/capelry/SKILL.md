@@ -35,7 +35,7 @@ When the user asks to update Capelry itself, inspect first, then update only wit
 ```text
 python3 <capelry-skill-dir>/scripts/capelry.py self-update --dry-run
 python3 <capelry-skill-dir>/scripts/capelry.py self-update --yes
-python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref v2.0.0 --yes
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref v2.0.1 --yes
 ```
 
 Self-update replaces the installed Capelry skill directory from GitHub source path `skills/capelry`. It is not a background update; use `--yes` for non-interactive runs, and reload/restart the agent afterward. Existing pre-1.1.0 installs need one manual re-bootstrap/reinstall to get the `self-update` command. Use `git` rather than self-update inside the `capelry-skills` source checkout unless the user explicitly asks to pass `--allow-source-checkout`. If GitHub API rate limits are hit, set `CAPELRY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`.
@@ -246,7 +246,7 @@ Use `SKILL.md` as the manifest `spec.docs.readme` when you do not need a human R
 Create a zip from inside the skill directory:
 
 ```text
-python3 -m zipfile -c capelry-2.0.0.zip capability.yaml SKILL.md BOOTSTRAP.md ai-catalog.json agents scripts
+python3 -m zipfile -c capelry-2.0.1.zip capability.yaml SKILL.md BOOTSTRAP.md ai-catalog.json agents scripts
 # Add references/ or assets/ only if those directories exist.
 ```
 
