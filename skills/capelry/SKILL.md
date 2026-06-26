@@ -70,9 +70,9 @@ Recommended agent algorithm, aligned with the Capelry API docs at `https://capel
 
 1. Generate 3-6 related queries from the user's phrase. Remove generic words like “skill” or “capability”.
 2. Search with narrow ARD filters first: `--type skill --status passed` and a small top-N target. `search` and `discover` use `POST /search` by default.
-3. Inspect shortlisted entries with `info`; it resolves both `urn:ai:...` identifiers and legacy `namespace/name` refs through ARD `/agents` metadata aliases by default.
-4. Compare trust/install metadata: ARD identifier, media type, source, trust state, Trust Manifest/provenance, install instructions, and checksum when present.
-5. Return a concise shortlist using the output format below. Install only after user confirmation unless the user requested a specific known capability. The CLI falls back to the old compatibility API only when an ARD endpoint is missing; use `--api ard` to fail closed, or `--api legacy` / `CAPELRY_USE_LEGACY_API=1` when you intentionally need the old `/api/capabilities` compatibility API.
+3. Inspect shortlisted entries with `info`; it resolves both `urn:ai:...` identifiers and `namespace/name` slug refs through ARD `/agents` metadata filters by default.
+4. Compare trust/install metadata: ARD identifier, slug, media type, source, trust state, Trust Manifest/provenance, install instructions, and checksum when present.
+5. Return a concise shortlist using the output format below. Install only after user confirmation unless the user requested a specific known capability.
 
 Preferred CLI for agentic discovery:
 
@@ -85,7 +85,8 @@ Equivalent manual batch flow:
 ```text
 python3 .pi/skills/capelry/scripts/capelry.py search "feature planning" --type skill --status passed --limit 10
 python3 .pi/skills/capelry/scripts/capelry.py search prd --expand --type skill --status passed --limit 10
-python3 .pi/skills/capelry/scripts/capelry.py bulk-info phuryn/prioritize-features phuryn/sprint-plan --install-snippet pi-project
+python3 .pi/skills/capelry/scripts/capelry.py info phuryn/prioritize-features --install-snippet pi-project
+python3 .pi/skills/capelry/scripts/capelry.py info phuryn/sprint-plan --install-snippet pi-project
 ```
 
 Recommended shortlist output format:
@@ -97,7 +98,7 @@ Recommended shortlist output format:
    summary: ...
    source: https://github.com/org/repo
    trust: source-hosted
-   legacy ref: namespace/name
+   slug: namespace/name
    install: python3 .pi/skills/capelry/scripts/capelry.py install namespace/name --target pi-project
 ```
 
@@ -161,22 +162,20 @@ Useful search flags:
 
 - `--expand`: search related terms for broader discovery.
 - `--json`: emit machine-readable output.
-- `--type skill`: map the legacy package type to supported ARD skill media types.
+- `--type skill`: map the package type to supported ARD skill media types.
 - `--media-type application/vnd.capelry.skill-source+json`: filter exact ARD media types; repeat or comma-separate.
 - `--publisher github.com`: filter by ARD publisher.
 - `--trust-state source-hosted`: filter by Capelry trust state.
 - `--filter FIELD=VALUE`: pass a generic ARD filter, e.g. `tags=ard,skill`.
 - `--status passed`: filter by `metadata.com.capelry.validationStatus`.
 - `--source github/awesome-copilot`: filter by `metadata.com.capelry.sourceRepository`.
-- `--domain devops` / `--phase production`: map legacy facet filters to `metadata.com.capelry.domains` and `metadata.com.capelry.lifecyclePhases`.
-- `--api ard`: require ARD and fail closed if the endpoint is unavailable.
-- `--api legacy`: intentionally use the old `/api/capabilities` compatibility API.
+- `--domain devops` / `--phase production`: map facet filters to `metadata.com.capelry.domains` and `metadata.com.capelry.lifecyclePhases`.
 
 Direct ARD endpoint: `POST {CAPELRY_REGISTRY_URL}/search` with `{"query":{"text":"query","filter":{...}},"federation":"none","pageSize":10}`.
 
 ### Discover Shortlist
 
-Use `discover` for “find me skills for X”. It batches related ARD searches, dedupes entries by identifier, and prints identifier/name/type/summary/source/score/trust/install command when a legacy install ref is available.
+Use `discover` for “find me skills for X”. It batches related ARD searches, dedupes entries by identifier, and prints identifier/name/type/summary/source/score/trust/slug/install command when a slug is available.
 
 ```text
 python3 <capelry-skill-dir>/scripts/capelry.py discover "feature planning skills" --query "feature planning,feature,prd,implementation plan" --top 5 --install-snippet pi-project
@@ -189,21 +188,20 @@ python3 <capelry-skill-dir>/scripts/capelry.py info namespace/name --install-sni
 python3 <capelry-skill-dir>/scripts/capelry.py info urn:ai:github.com:org:repo:skill --json
 ```
 
-Default ARD resolution uses `GET {CAPELRY_REGISTRY_URL}/agents?filter=identifier = '...'` for URNs and `metadata.com.capelry.legacyRef = 'namespace/name'` for legacy refs. Use `--api legacy` only when intentionally reading `GET /api/capabilities/namespace/name` during the migration window.
+Default ARD resolution uses `GET {CAPELRY_REGISTRY_URL}/agents?filter=identifier = '...'` for URNs and `metadata.com.capelry.slug = 'namespace/name'` for slug refs.
 
-### Batch Inspect
+### Inspect Multiple Entries
 
-Use `bulk-info` (alias: `batch-info`) only when you intentionally need the legacy compatibility bulk API. Default ARD discovery should use `discover` plus `info`.
+For small shortlists, run `info` for each ARD slug or URN you are considering. Prefer `discover` when you need ranked shortlist output across related queries.
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py bulk-info namespace/name other/name --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info namespace/name --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info urn:ai:github.com:org:repo:skill --install-snippet pi-project
 ```
-
-Direct API endpoint: `POST {CAPELRY_REGISTRY_URL}/api/capabilities/bulk` with `{"refs":["namespace/name","other/name"]}`. Bulk accepts 1-25 unique refs and returns `capabilities[]`, per-ref `errors[]`, and `actionMetadata`.
 
 ### Compare Before Installing
 
-Inspect at least one candidate, and usually two or three, before installing third-party skills. Prefer ARD `discover` and `info`; use `bulk-info` only for legacy compatibility shortlists. Compare:
+Inspect at least one candidate, and usually two or three, before installing third-party skills. Prefer ARD `discover` and `info`. Compare:
 
 - package type and validation status
 - summary and detailed description
@@ -221,12 +219,12 @@ python3 <capelry-skill-dir>/scripts/capelry.py install urn:ai:github.com:org:rep
 
 Use `--target agents-project`, `--target claude-project`, or another target if Pi is not the active project format.
 
-The installer resolves ARD entries by URN or legacy `namespace/name` metadata alias, prints trust state/Trust Manifest provenance before installing, and supports these ARD media types:
+The installer resolves ARD entries by URN or `namespace/name` slug metadata, prints trust state/Trust Manifest provenance before installing, and supports these ARD media types:
 
 - `application/vnd.capelry.skill+zip`: downloads the archive URL, verifies SHA-256 when present, and extracts only safe paths that contain `SKILL.md`.
 - `application/vnd.capelry.skill-source+json`: installs from a pinned source descriptor/ref when possible, using a declared source archive or GitHub source path.
 
-Unsupported media types are not auto-installed; the CLI prints open/connect guidance instead. Use `--api legacy` only when intentionally installing through the old `/api/capabilities` archive flow. In legacy mode, if a curated provenance-wrapper archive does not contain `SKILL.md`, the installer falls back to the declared GitHub source path.
+Unsupported media types are not auto-installed; the CLI prints open/connect guidance instead.
 
 ### Publish or Package a Capability
 

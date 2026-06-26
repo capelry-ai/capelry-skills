@@ -39,9 +39,9 @@ ARD_VALIDATION_STATUS_FILTER = "metadata.com.capelry.validationStatus"
 ARD_SOURCE_REPOSITORY_FILTER = "metadata.com.capelry.sourceRepository"
 ARD_DOMAIN_FILTER = "metadata.com.capelry.domains"
 ARD_PHASE_FILTER = "metadata.com.capelry.lifecyclePhases"
-ARD_LEGACY_REF_FILTER = "metadata.com.capelry.legacyRef"
+ARD_SLUG_FILTER = "metadata.com.capelry.slug"
 ARD_TRUST_STATE_METADATA = "com.capelry.trustState"
-ARD_LEGACY_REF_METADATA = "com.capelry.legacyRef"
+ARD_SLUG_METADATA = "com.capelry.slug"
 
 TARGET_ROOTS = {
     "agents-project": ".agents/skills",
@@ -135,19 +135,6 @@ def eprint(*parts: object) -> None:
 
 def registry_base(args: argparse.Namespace) -> str:
     return (args.registry or os.environ.get("CAPELRY_REGISTRY_URL") or DEFAULT_REGISTRY).rstrip("/")
-
-
-def env_truthy(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on", "legacy"}
-
-
-def selected_registry_api(args: argparse.Namespace) -> str:
-    explicit_api = getattr(args, "api", None)
-    if explicit_api:
-        return explicit_api
-    if env_truthy("CAPELRY_USE_LEGACY_API"):
-        return "legacy"
-    return "ard"
 
 
 def api_url(base: str, path: str) -> str:
@@ -252,10 +239,6 @@ class ArdApiError(SystemExit):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(message)
         self.status = status
-
-
-def should_fallback_to_legacy_api(args: argparse.Namespace, error: ArdApiError) -> bool:
-    return getattr(args, "api", None) is None and not env_truthy("CAPELRY_USE_LEGACY_API") and error.status in {404, 405, 501}
 
 
 def ard_error_message(url: str, status: int, body_text: str) -> str:
@@ -371,8 +354,7 @@ def source_slug(capability: dict[str, Any]) -> str:
 
 
 def capability_detail(base: str, ref: str) -> dict[str, Any]:
-    namespace, name, _ = parse_ref(ref)
-    return fetch_json(api_url(base, f"/api/capabilities/{namespace}/{name}"))["capability"]
+    raise SystemExit("Legacy Capelry compatibility API was removed in v2.0.1; use ARD identifiers or slugs.")
 
 
 def latest_version(capability: dict[str, Any]) -> str:
@@ -404,24 +386,7 @@ def search_capabilities(
     source: str | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    params: dict[str, str] = {"q": query}
-    if package_type:
-        params["type"] = package_type
-    if status:
-        params["validation"] = status
-    if domain:
-        params["domain"] = domain
-    if phase:
-        params["phase"] = phase
-    if source:
-        params["source"] = source
-    clamped_limit = clamp_api_search_limit(limit)
-    if clamped_limit is not None:
-        params["limit"] = str(clamped_limit)
-    encoded = urllib.parse.urlencode(params)
-    payload = fetch_json(api_url(base, f"/api/capabilities?{encoded}"))
-    capabilities = payload.get("capabilities", [])
-    return capabilities if isinstance(capabilities, list) else []
+    raise SystemExit("Legacy Capelry compatibility API was removed in v2.0.1; use ARD search.")
 
 
 def split_arg_values(values: list[str] | None) -> list[str]:
@@ -526,8 +491,13 @@ def ard_entry_media_type(entry: dict[str, Any]) -> str:
     return media_type if isinstance(media_type, str) and media_type else "?"
 
 
-def ard_entry_output(entry: dict[str, Any]) -> dict[str, Any]:
+def ard_slug(entry: dict[str, Any]) -> str | None:
     metadata = ard_metadata(entry)
+    value = metadata.get(ARD_SLUG_METADATA) or metadata.get(ARD_SLUG_FILTER)
+    return value if isinstance(value, str) and value else None
+
+
+def ard_entry_output(entry: dict[str, Any]) -> dict[str, Any]:
     output = {
         "identifier": entry.get("identifier"),
         "displayName": entry.get("displayName"),
@@ -537,7 +507,7 @@ def ard_entry_output(entry: dict[str, Any]) -> dict[str, Any]:
         "score": entry.get("score"),
         "source": entry.get("source"),
         "trustState": ard_trust_state(entry),
-        "legacyRef": metadata.get(ARD_LEGACY_REF_METADATA) or metadata.get(ARD_LEGACY_REF_FILTER),
+        "slug": ard_slug(entry),
     }
     return {key: value for key, value in output.items() if value is not None}
 
@@ -557,6 +527,9 @@ def print_ard_entries(entries: list[dict[str, Any]]) -> None:
         trust_state = ard_trust_state(entry)
         if trust_state:
             metadata.append(f"trust={trust_state}")
+        slug = ard_slug(entry)
+        if slug:
+            metadata.append(f"slug={slug}")
         if metadata:
             print("  " + " ".join(str(item) for item in metadata))
         description = entry.get("description")
@@ -565,18 +538,18 @@ def print_ard_entries(entries: list[dict[str, Any]]) -> None:
 
 
 def ard_resolution_field(value: str) -> str:
-    return "identifier" if value.startswith("urn:ai:") else ARD_LEGACY_REF_FILTER
+    return "identifier" if value.startswith("urn:ai:") else ARD_SLUG_FILTER
 
 
 def ard_detail_summary(entry: dict[str, Any], install_target: str | None = None) -> dict[str, Any]:
     metadata = ard_metadata(entry)
     identifier = entry.get("identifier") if isinstance(entry.get("identifier"), str) else "?"
-    legacy_ref = metadata.get(ARD_LEGACY_REF_METADATA) or metadata.get(ARD_LEGACY_REF_FILTER)
+    slug = ard_slug(entry)
     detail_url = metadata.get("com.capelry.detailUrl") or metadata.get("metadata.com.capelry.detailUrl")
     source = entry.get("source") or metadata.get("com.capelry.sourceRepository") or metadata.get(ARD_SOURCE_REPOSITORY_FILTER)
     output = {
         "identifier": identifier,
-        "name": identifier,
+        "name": slug or identifier,
         "displayName": entry.get("displayName") or identifier,
         "version": entry.get("version") or "?",
         "mediaType": ard_entry_media_type(entry),
@@ -585,10 +558,10 @@ def ard_detail_summary(entry: dict[str, Any], install_target: str | None = None)
         "page": detail_url if isinstance(detail_url, str) and detail_url else None,
         "score": entry.get("score"),
         "trustState": ard_trust_state(entry),
-        "legacyRef": legacy_ref if isinstance(legacy_ref, str) and legacy_ref else None,
+        "slug": slug,
     }
-    if install_target and output["legacyRef"]:
-        output["installCommand"] = install_snippet(str(output["legacyRef"]), install_target)
+    if install_target:
+        output["installCommand"] = install_snippet(slug or identifier, install_target)
     return {key: value for key, value in output.items() if value is not None}
 
 
@@ -607,8 +580,8 @@ def print_ard_detail_summaries(summaries: list[dict[str, Any]]) -> None:
             print(f"   score: {item['score']}")
         if item.get("trustState"):
             print(f"   trust: {item['trustState']}")
-        if item.get("legacyRef"):
-            print(f"   legacy ref: {item['legacyRef']}")
+        if item.get("slug"):
+            print(f"   slug: {item['slug']}")
         if item.get("installCommand"):
             print(f"   install: {item['installCommand']}")
 
@@ -755,19 +728,16 @@ def parse_ref_list(values: list[str]) -> list[str]:
     refs: list[str] = []
     for value in values:
         refs.extend(part.strip() for part in value.split(","))
-    result: list[str] = []
-    for ref in dedupe(refs):
-        parse_ref(ref)
-        result.append(ref)
+    result = dedupe([ref for ref in refs if ref])
     if not result:
-        raise SystemExit("At least one capability ref is required")
+        raise SystemExit("At least one ARD identifier or slug is required")
     if len(result) > 25:
         raise SystemExit("Bulk detail accepts at most 25 unique refs")
     return result
 
 
 def bulk_capability_details(base: str, refs: list[str]) -> dict[str, Any]:
-    return post_json(api_url(base, "/api/capabilities/bulk"), {"refs": refs})
+    raise SystemExit("Legacy Capelry compatibility API was removed in v2.0.1; use ARD info or discover.")
 
 
 def capability_output(
@@ -889,157 +859,69 @@ def command_search(args: argparse.Namespace) -> None:
     queries = expanded_queries(args.query) if args.expand else [args.query]
     display_limit = result_limit(args.limit)
 
-    use_legacy = selected_registry_api(args) != "ard"
-    if not use_legacy:
-        try:
-            entries = collect_ard_search_results(base, args, queries, per_query_limit=display_limit)
-            limited_entries = entries[:display_limit]
-            if args.json_output:
-                print_json(
-                    {
-                        "registry": base,
-                        "api": "ard",
-                        "query": args.query,
-                        "queries": queries,
-                        "request": ard_search_payload(args, args.query, page_size=display_limit),
-                        "count": len(entries),
-                        "limit": display_limit,
-                        "suggestedQueries": expanded_queries(args.query)[1:],
-                        "entries": [ard_entry_output(entry) for entry in limited_entries],
-                    }
-                )
-                return
-            if not entries:
-                print("No ARD entries found.")
-                return
-            print_ard_entries(limited_entries)
-            return
-        except ArdApiError as error:
-            if not should_fallback_to_legacy_api(args, error):
-                raise
-            use_legacy = True
-            if not args.json_output:
-                eprint(f"ARD endpoint unavailable ({error.status}); falling back to legacy API. Use --api ard to fail instead.")
-
-    api_limit = clamp_api_search_limit(max(display_limit, 25))
-    filtered = collect_search_results(base, args, queries, per_query_limit=api_limit)
-    limited = filtered[:display_limit]
-
+    entries = collect_ard_search_results(base, args, queries, per_query_limit=display_limit)
+    limited_entries = entries[:display_limit]
     if args.json_output:
         print_json(
             {
                 "registry": base,
+                "api": "ard",
                 "query": args.query,
                 "queries": queries,
-                "filters": {
-                    "type": args.package_type,
-                    "status": args.status,
-                    "source": args.source,
-                    "domain": args.domain,
-                    "phase": args.phase,
-                },
-                "count": len(filtered),
+                "request": ard_search_payload(args, args.query, page_size=display_limit),
+                "count": len(entries),
                 "limit": display_limit,
                 "suggestedQueries": expanded_queries(args.query)[1:],
-                "capabilities": [capability_output(item, base, args) for item in limited],
+                "entries": [ard_entry_output(entry) for entry in limited_entries],
             }
         )
         return
-
-    if not filtered:
-        print("No capabilities found.")
-        suggestions = expanded_queries(args.query)[1:7]
-        if suggestions and not args.expand:
-            print("Try --expand or related queries: " + ", ".join(suggestions))
+    if not entries:
+        print("No ARD entries found.")
         return
-
-    show_metadata = args.explain_relevance or args.install_snippet or args.package_type or args.status or args.source
-    for item in limited:
-        ref = capability_ref(item)
-        version = capability_version(item)
-        package_type = capability_type(item)
-        summary = item.get("summary") or item.get("description") or ""
-        print(f"{ref}@{version} [{package_type}] {summary}")
-        if show_metadata:
-            metadata = [f"status={capability_status(item)}"]
-            slug = source_slug(item)
-            if slug:
-                metadata.append(f"source={slug}")
-            print("  " + " ".join(metadata))
-        if args.explain_relevance:
-            print(f"  relevance: {relevance_reasons(item, args.query, args)}")
-        if args.install_snippet:
-            print(f"  install: {install_snippet(ref, args.install_snippet)}")
+    print_ard_entries(limited_entries)
 
 
 def command_info(args: argparse.Namespace) -> None:
     base = registry_base(args)
-    use_legacy = selected_registry_api(args) != "ard"
-    if not use_legacy:
-        try:
-            entries = ard_agents_entries(base, field=ard_resolution_field(args.ref), value=args.ref, page_size=1)
-            if not entries:
-                raise SystemExit(f"No ARD entry found for {args.ref}")
-            entry = entries[0]
-            if args.json_output:
-                output = ard_entry_output(entry)
-                legacy_ref = ard_legacy_ref(entry)
-                if args.install_snippet and legacy_ref:
-                    output["installSnippet"] = install_snippet(legacy_ref, args.install_snippet)
-                print_json({"registry": base, "api": "ard", "entry": output})
-                return
-            print_ard_detail_summaries([ard_detail_summary(entry, args.install_snippet)])
-            return
-        except ArdApiError as error:
-            if args.ref.startswith("urn:ai:") or not should_fallback_to_legacy_api(args, error):
-                raise
-            use_legacy = True
-            if not args.json_output:
-                eprint(f"ARD endpoint unavailable ({error.status}); falling back to legacy API. Use --api ard to fail instead.")
-
-    capability = capability_detail(base, args.ref)
-    latest = capability.get("latestVersion") or {}
-    source = capability.get("source") or {}
-    ref = capability_ref(capability)
-
+    entries = ard_agents_entries(base, field=ard_resolution_field(args.ref), value=args.ref, page_size=1)
+    if not entries:
+        raise SystemExit(f"No ARD entry found for {args.ref}")
+    entry = entries[0]
     if args.json_output:
-        print_json({"registry": base, "capability": capability_output(capability, base, args)})
+        output = ard_entry_output(entry)
+        if args.install_snippet:
+            ref = ard_slug(entry) or str(output.get("identifier") or args.ref)
+            output["installSnippet"] = install_snippet(ref, args.install_snippet)
+        print_json({"registry": base, "api": "ard", "entry": output})
         return
-
-    print(f"{ref}@{latest.get('version', '?')}")
-    print(f"type: {capability.get('packageType', 'capability')}")
-    print(f"status: {latest.get('validationStatus', '?')}")
-    if capability.get("summary"):
-        print(f"summary: {capability['summary']}")
-    if capability.get("description"):
-        print(f"description: {capability['description']}")
-    if source.get("repository"):
-        print(f"source: {source['repository']}")
-    if source.get("path"):
-        print(f"source path: {source['path']}")
-    print(f"page: {base}/{capability['namespace']}/{capability['name']}")
-    if latest.get("checksumSha256"):
-        print(f"checksum: {latest['checksumSha256']}")
-    if args.install_snippet:
-        print(f"install: {install_snippet(ref, args.install_snippet)}")
+    print_ard_detail_summaries([ard_detail_summary(entry, args.install_snippet)])
 
 
 def command_bulk_info(args: argparse.Namespace) -> None:
     base = registry_base(args)
     refs = parse_ref_list(args.refs)
-    payload = bulk_capability_details(base, refs)
-    entries = payload.get("capabilities", [])
-    summaries = [detail_summary(entry, base, args.install_snippet) for entry in entries if isinstance(entry, dict)]
+    summaries: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for ref in refs:
+        try:
+            entries = ard_agents_entries(base, field=ard_resolution_field(ref), value=ref, page_size=1)
+        except ArdApiError as error:
+            errors.append({"ref": ref, "code": f"HTTP_{error.status}", "message": str(error)})
+            continue
+        if not entries:
+            errors.append({"ref": ref, "code": "not_found", "message": "No ARD entry found"})
+            continue
+        summaries.append(ard_detail_summary(entries[0], args.install_snippet))
 
     if args.json_output:
-        print_json({"registry": base, "refs": refs, "shortlist": summaries, "bulk": payload})
+        print_json({"registry": base, "api": "ard", "refs": refs, "shortlist": summaries, "errors": errors})
         return
 
     if summaries:
-        print_detail_summaries(summaries)
-    for error in payload.get("errors", []) or []:
-        if isinstance(error, dict):
-            print(f"error: {error.get('ref', '?')}: {error.get('code', '?')} - {error.get('message', '')}")
+        print_ard_detail_summaries(summaries)
+    for error in errors:
+        print(f"error: {error.get('ref', '?')}: {error.get('code', '?')} - {error.get('message', '')}")
 
 
 def compact_query(query: str) -> str:
@@ -1063,79 +945,29 @@ def command_discover(args: argparse.Namespace) -> None:
     top = min(max(args.top, 1), 25)
     api_limit = clamp_api_search_limit(max(args.search_limit, top, 25))
 
-    use_legacy = selected_registry_api(args) != "ard"
-    if not use_legacy:
-        try:
-            entries = collect_ard_search_results(base, args, queries, per_query_limit=api_limit)
-            shortlist = entries[:top]
-            summaries = [ard_detail_summary(entry, args.install_snippet) for entry in shortlist]
-            if args.json_output:
-                print_json(
-                    {
-                        "registry": base,
-                        "api": "ard",
-                        "query": args.query,
-                        "queries": queries,
-                        "filters": build_ard_filter(args),
-                        "entries": [ard_entry_output(entry) for entry in shortlist],
-                        "shortlist": summaries,
-                    }
-                )
-                return
-
-            if not shortlist:
-                print("No ARD entries found.")
-                return
-
-            print("Queries: " + "; ".join(queries))
-            print_ard_detail_summaries(summaries)
-            return
-        except ArdApiError as error:
-            if not should_fallback_to_legacy_api(args, error):
-                raise
-            use_legacy = True
-            if not args.json_output:
-                eprint(f"ARD endpoint unavailable ({error.status}); falling back to legacy API. Use --api ard to fail instead.")
-
-    filtered = collect_search_results(base, args, queries, per_query_limit=api_limit)
-    refs = [capability_ref(item) for item in filtered[:top]]
-
-    payload: dict[str, Any] = {"capabilities": [], "errors": [], "meta": {"requested": 0, "returned": 0, "limit": 25}}
-    summaries: list[dict[str, Any]] = []
-    if refs:
-        payload = bulk_capability_details(base, refs)
-        summaries = [detail_summary(entry, base, args.install_snippet) for entry in payload.get("capabilities", []) if isinstance(entry, dict)]
-
+    entries = collect_ard_search_results(base, args, queries, per_query_limit=api_limit)
+    shortlist = entries[:top]
+    summaries = [ard_detail_summary(entry, args.install_snippet) for entry in shortlist]
     if args.json_output:
         print_json(
             {
                 "registry": base,
-                "api": "legacy",
+                "api": "ard",
                 "query": args.query,
                 "queries": queries,
-                "filters": {
-                    "type": args.package_type,
-                    "status": args.status,
-                    "source": args.source,
-                    "domain": args.domain,
-                    "phase": args.phase,
-                },
-                "refs": refs,
+                "filters": build_ard_filter(args),
+                "entries": [ard_entry_output(entry) for entry in shortlist],
                 "shortlist": summaries,
-                "bulkErrors": payload.get("errors", []),
             }
         )
         return
 
-    if not refs:
-        print("No capabilities found.")
+    if not shortlist:
+        print("No ARD entries found.")
         return
 
     print("Queries: " + "; ".join(queries))
-    print_detail_summaries(summaries)
-    for error in payload.get("errors", []) or []:
-        if isinstance(error, dict):
-            print(f"error: {error.get('ref', '?')}: {error.get('code', '?')} - {error.get('message', '')}")
+    print_ard_detail_summaries(summaries)
 
 
 def safe_zip_members(zf: zipfile.ZipFile):
@@ -1428,20 +1260,15 @@ def ard_archive_checksum(entry: dict[str, Any]) -> str | None:
     return checksum if isinstance(checksum, str) else None
 
 
-def ard_legacy_ref(entry: dict[str, Any]) -> str | None:
-    value = ard_metadata_string(entry, ARD_LEGACY_REF_METADATA, ARD_LEGACY_REF_FILTER)
-    return value if value and "/" in value else None
-
-
 def slugify_install_name(value: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
     return slug or "capelry-entry"
 
 
 def ard_entry_install_name(entry: dict[str, Any], requested_ref: str) -> str:
-    legacy_ref = ard_legacy_ref(entry)
-    if legacy_ref:
-        return legacy_ref.split("/", 1)[1]
+    slug = ard_slug(entry)
+    if slug and "/" in slug:
+        return slug.split("/", 1)[1]
     identifier = entry.get("identifier")
     if isinstance(identifier, str) and identifier:
         return slugify_install_name(identifier.rsplit(":", 1)[-1].rsplit("/", 1)[-1])
@@ -1562,61 +1389,9 @@ def unsupported_ard_install_message(entry: dict[str, Any]) -> str:
     return f"Unsupported ARD media type for automatic install: {ard_entry_media_type(entry)}.{guidance}"
 
 
-def command_install_legacy(args: argparse.Namespace) -> None:
-    base = registry_base(args)
-    namespace, name, version_in_ref = parse_ref(args.ref)
-    capability = capability_detail(base, args.ref)
-    version = args.version or version_in_ref or latest_version(capability)
-    dest = resolve_install_dest(args, name)
-
-    archive_url = api_url(base, f"/api/capabilities/{namespace}/{name}/versions/{version}/download")
-    if not args.json_output:
-        print(f"Downloading {namespace}/{name}@{version} from {base}...")
-    archive = fetch_bytes(archive_url)
-
-    if extract_skill_archive(archive, dest, args.force):
-        installed_from = "validated Capelry archive"
-    else:
-        installed_from = install_from_github_source(capability, dest, args.force)
-        if not installed_from:
-            raise SystemExit("Package did not contain SKILL.md and no supported source fallback was available")
-
-    skill_name = installed_skill_name(dest)
-    if args.json_output:
-        print_json(
-            {
-                "registry": base,
-                "api": "legacy",
-                "ref": f"{namespace}/{name}",
-                "version": version,
-                "destination": str(dest),
-                "installedFrom": installed_from,
-                "skillName": skill_name,
-                "next": f"reload or restart your agent; in Pi run /reload and then /skill:{skill_name}",
-            }
-        )
-        return
-
-    print(f"Installed {namespace}/{name}@{version} to {dest}")
-    print(f"source: {installed_from}")
-    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:" + skill_name)
-
-
 def command_install(args: argparse.Namespace) -> None:
-    if selected_registry_api(args) == "legacy":
-        command_install_legacy(args)
-        return
-
     base = registry_base(args)
-    try:
-        entry = resolve_ard_entry_for_install(base, args.ref)
-    except ArdApiError as error:
-        if args.ref.startswith("urn:ai:") or not should_fallback_to_legacy_api(args, error):
-            raise
-        if not args.json_output:
-            eprint(f"ARD endpoint unavailable ({error.status}); falling back to legacy API. Use --api ard to fail instead.")
-        command_install_legacy(args)
-        return
+    entry = resolve_ard_entry_for_install(base, args.ref)
     media_type = ard_entry_media_type(entry)
     dest = resolve_install_dest(args, ard_entry_install_name(entry, args.ref))
     if not args.json_output:
@@ -1636,6 +1411,7 @@ def command_install(args: argparse.Namespace) -> None:
         "api": "ard",
         "ref": args.ref,
         "identifier": entry.get("identifier"),
+        "slug": ard_slug(entry),
         "mediaType": media_type,
         "trustState": ard_trust_state(entry),
         "destination": str(dest),
@@ -1646,7 +1422,7 @@ def command_install(args: argparse.Namespace) -> None:
     if checksum:
         result["checksumSha256"] = checksum
     if args.json_output:
-        print_json(result)
+        print_json({key: value for key, value in result.items() if value is not None})
         return
 
     print(f"Installed {entry.get('identifier', args.ref)} to {dest}")
@@ -1994,21 +1770,16 @@ def add_install_snippet_argument(parser: argparse.ArgumentParser, default: str |
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Search, inspect, install, and update capabilities from Capelry")
+    parser = argparse.ArgumentParser(description="Search, inspect, install, and update ARD resources from Capelry")
     parser.add_argument("--registry", help=f"Registry base URL (default: {DEFAULT_REGISTRY} or CAPELRY_REGISTRY_URL)")
     parser.add_argument("--json", dest="json_output", action="store_true", help="Emit machine-readable JSON output")
     parser.set_defaults(json_output=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    search = subparsers.add_parser("search", help="Search capabilities")
+    search = subparsers.add_parser("search", help="Search ARD resources")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=20)
     search.add_argument("--expand", action="store_true", help="Search related terms when an exact phrase is too narrow")
-    search.add_argument(
-        "--api",
-        choices=("legacy", "ard"),
-        help="Registry API to use (default: ard; CAPELRY_USE_LEGACY_API=1 selects legacy)",
-    )
     search.add_argument("--type", dest="package_type", help="Filter by package type, e.g. skill, agent, prompt")
     search.add_argument("--media-type", action="append", help="ARD media type filter; repeat or comma-separate values")
     search.add_argument("--publisher", action="append", help="ARD publisher filter; repeat or comma-separate values")
@@ -2024,17 +1795,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_json_argument(search)
     search.set_defaults(func=command_search)
 
-    discover = subparsers.add_parser("discover", help="Search related queries, bulk-inspect top results, and print a shortlist")
+    discover = subparsers.add_parser("discover", help="Search related ARD queries, inspect top results, and print a shortlist")
     discover.add_argument("query")
     discover.add_argument("--query", dest="extra_query", action="append", help="Additional related query; repeat or comma-separate")
     discover.add_argument("--top", type=int, default=5, help="Number of top refs to bulk-inspect (max 25)")
     discover.add_argument("--search-limit", type=int, default=10, help="Per-query search limit before dedupe")
     discover.add_argument("--no-expand", action="store_true", help="Disable built-in related-query expansion")
-    discover.add_argument(
-        "--api",
-        choices=("legacy", "ard"),
-        help="Registry API to use (default: ard; CAPELRY_USE_LEGACY_API=1 selects legacy)",
-    )
     discover.add_argument("--type", dest="package_type", default="skill", help="Filter by package type (default: skill)")
     discover.add_argument("--media-type", action="append", help="ARD media type filter; repeat or comma-separate values")
     discover.add_argument("--publisher", action="append", help="ARD publisher filter; repeat or comma-separate values")
@@ -2049,13 +1815,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_json_argument(discover)
     discover.set_defaults(func=command_discover)
 
-    info = subparsers.add_parser("info", help="Show capability or ARD entry details")
-    info.add_argument("ref", help="namespace/name or urn:ai:...")
-    info.add_argument(
-        "--api",
-        choices=("legacy", "ard"),
-        help="Registry API to use (default: ard; CAPELRY_USE_LEGACY_API=1 selects legacy)",
-    )
+    info = subparsers.add_parser("info", help="Show ARD entry details")
+    info.add_argument("ref", help="ARD slug namespace/name or urn:ai:...")
     add_install_snippet_argument(info)
     add_json_argument(info)
     info.set_defaults(func=command_info)
@@ -2063,21 +1824,15 @@ def build_parser() -> argparse.ArgumentParser:
     bulk_info = subparsers.add_parser(
         "bulk-info",
         aliases=["batch-info"],
-        help="Bulk-inspect up to 25 refs with /api/capabilities/bulk",
+        help="Bulk-inspect up to 25 ARD identifiers or slugs with /agents",
     )
-    bulk_info.add_argument("refs", nargs="+", help="Refs as space-separated or comma-separated namespace/name values")
+    bulk_info.add_argument("refs", nargs="+", help="Refs as space-separated or comma-separated ARD identifiers or slugs")
     add_install_snippet_argument(bulk_info, default="pi-project")
     add_json_argument(bulk_info)
     bulk_info.set_defaults(func=command_bulk_info)
 
-    install = subparsers.add_parser("install", help="Install a supported skill from an ARD entry or legacy capability")
-    install.add_argument("ref", help="urn:ai:... or legacy namespace/name; namespace/name@version only with --api legacy")
-    install.add_argument(
-        "--api",
-        choices=("legacy", "ard"),
-        help="Registry API to use (default: ard; CAPELRY_USE_LEGACY_API=1 selects legacy)",
-    )
-    install.add_argument("--version", help="Legacy version override")
+    install = subparsers.add_parser("install", help="Install a supported skill from an ARD entry")
+    install.add_argument("ref", help="ARD slug namespace/name or urn:ai:...")
     install.add_argument("--target", choices=sorted(TARGET_ROOTS), default="agents-project")
     install.add_argument("--dest", help="Exact destination directory")
     install.add_argument("--name", help="Install directory name override")
