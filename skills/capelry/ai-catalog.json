@@ -24,11 +24,11 @@
         "install a Capelry skill into Pi",
         "bootstrap capability discovery into a fresh coding project"
       ],
-      "version": "2.0.0",
+      "version": "2.0.1",
       "updatedAt": "2026-06-21T00:00:00Z",
       "metadata": {
         "com.capelry.packageType": "skill",
-        "com.capelry.legacyRef": "capelry/capelry",
+        "com.capelry.slug": "capelry/capelry",
         "com.capelry.trustState": "source-hosted",
         "com.capelry.sourceRepository": "https://github.com/capelry-ai/capelry-skills",
         "com.capelry.sourcePath": "skills/capelry",

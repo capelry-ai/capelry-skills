@@ -88,7 +88,7 @@ Useful options:
 
 ```text
 python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref main --target agents-project
-python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref v2.0.0 --target agents-project  # example published release tag
+python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref v2.0.1 --target agents-project  # example published release tag
 python3 scripts/bootstrap.py --target pi-project
 python3 scripts/bootstrap.py --target claude-project
 python3 scripts/bootstrap.py --target codex-project
@@ -216,11 +216,11 @@ Inspect one capability before installing:
 python3 <capelry-skill-dir>/scripts/capelry.py info openai/skill-creator --install-snippet pi-project
 ```
 
-If you intentionally need the legacy compatibility API, pass `--api legacy` for `search`, `info`, or `install`, or use the legacy-only bulk command:
+Capelry v2.0.1 and later use ARD discovery only. Human `namespace/name` refs resolve through ARD slug metadata, so use `info` for each shortlisted slug or URN before installing:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py search "skill creator" --api legacy --type skill --status passed
-python3 <capelry-skill-dir>/scripts/capelry.py bulk-info openai/skill-creator capelry/capelry --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info openai/skill-creator --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info capelry/capelry --install-snippet pi-project
 ```
 
 Install a skill into the portable project location:

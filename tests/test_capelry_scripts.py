@@ -20,11 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CAPELRY_SCRIPT = ROOT / "skills" / "capelry" / "scripts" / "capelry.py"
 BOOTSTRAP_SCRIPT = ROOT / "skills" / "capelry" / "scripts" / "bootstrap.py"
 SELF_CATALOG = ROOT / "skills" / "capelry" / "ai-catalog.json"
+SELF_CAPABILITY = ROOT / "skills" / "capelry" / "capability.yaml"
 
 
 def clean_env(**overrides: str) -> dict[str, str]:
     env = os.environ.copy()
-    env.pop("CAPELRY_USE_LEGACY_API", None)
     env.update(overrides)
     return env
 
@@ -39,7 +39,7 @@ def load_module(name: str, path: Path):
 
 
 class RegistryFixtureHandler(BaseHTTPRequestHandler):
-    legacy_requests: list[str] = []
+    unexpected_requests: list[str] = []
     ard_requests: list[dict[str, object]] = []
     agents_requests: list[str] = []
 
@@ -96,7 +96,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
             "source": "http://fixture-registry.test",
             "metadata": {
                 "com.capelry.trustState": "source-hosted",
-                "com.capelry.legacyRef": "capelry/demo-skill",
+                "com.capelry.slug": "capelry/demo-skill",
                 "com.capelry.sourceRepository": "https://github.com/capelry-ai/capelry-skills",
             },
             "trustManifest": {
@@ -115,7 +115,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     "url": f"{base}/archives/good.zip",
                     "metadata": {
                         "com.capelry.trustState": "checksum-only",
-                        "com.capelry.legacyRef": "capelry/zip-skill",
+                        "com.capelry.slug": "capelry/zip-skill",
                         "com.capelry.archiveUrl": f"{base}/archives/good.zip",
                         "com.capelry.archiveChecksumSha256": hashlib.sha256(archive).hexdigest(),
                     },
@@ -130,7 +130,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     "url": f"{base}/archives/good.zip",
                     "metadata": {
                         "com.capelry.trustState": "checksum-only",
-                        "com.capelry.legacyRef": "capelry/bad-checksum",
+                        "com.capelry.slug": "capelry/bad-checksum",
                         "com.capelry.archiveUrl": f"{base}/archives/good.zip",
                         "com.capelry.archiveChecksumSha256": "0" * 64,
                     },
@@ -145,7 +145,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     "url": f"{base}/archives/unsafe.zip",
                     "metadata": {
                         "com.capelry.trustState": "checksum-only",
-                        "com.capelry.legacyRef": "capelry/unsafe-zip",
+                        "com.capelry.slug": "capelry/unsafe-zip",
                         "com.capelry.archiveUrl": f"{base}/archives/unsafe.zip",
                         "com.capelry.archiveChecksumSha256": hashlib.sha256(self.unsafe_skill_zip()).hexdigest(),
                     },
@@ -165,7 +165,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     },
                     "metadata": {
                         "com.capelry.trustState": "source-hosted",
-                        "com.capelry.legacyRef": "capelry/source-skill",
+                        "com.capelry.slug": "capelry/source-skill",
                     },
                 }
             )
@@ -178,7 +178,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     "url": f"{base}/openapi.json",
                     "metadata": {
                         "com.capelry.trustState": "unsigned",
-                        "com.capelry.legacyRef": "capelry/unsupported",
+                        "com.capelry.slug": "capelry/unsupported",
                     },
                 }
             )
@@ -215,48 +215,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
             self.send_json({"items": [self.ard_entry(kind=kind)], "total": 1})
             return
 
-        if self.path.startswith("/api/capabilities?"):
-            self.legacy_requests.append(self.path)
-            self.send_json(
-                {
-                    "capabilities": [
-                        {
-                            "namespace": "capelry",
-                            "name": "demo-skill",
-                            "summary": "Fixture skill returned by legacy API.",
-                            "packageType": "skill",
-                            "latestVersion": {
-                                "version": "1.0.0",
-                                "validationStatus": "passed",
-                            },
-                            "source": {
-                                "repository": "https://github.com/capelry-ai/capelry-skills",
-                                "path": "skills/capelry",
-                            },
-                        }
-                    ],
-                    "meta": {"returned": 1},
-                }
-            )
-            return
-
-        if self.path == "/api/capabilities/capelry/demo-skill":
-            self.send_json(
-                {
-                    "capability": {
-                        "namespace": "capelry",
-                        "name": "demo-skill",
-                        "summary": "Fixture detail.",
-                        "packageType": "skill",
-                        "latestVersion": {
-                            "version": "1.0.0",
-                            "validationStatus": "passed",
-                        },
-                    }
-                }
-            )
-            return
-
+        self.unexpected_requests.append(self.path)
         self.send_json({"error": "not found"}, status=404)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler hook
@@ -281,7 +240,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
 
 class RegistryFixture:
     def __enter__(self) -> "RegistryFixture":
-        RegistryFixtureHandler.legacy_requests = []
+        RegistryFixtureHandler.unexpected_requests = []
         RegistryFixtureHandler.ard_requests = []
         RegistryFixtureHandler.agents_requests = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), RegistryFixtureHandler)
@@ -301,57 +260,23 @@ class RegistryFixture:
 
 
 class CapelryScriptTests(unittest.TestCase):
-    def test_legacy_search_requires_explicit_api_flag(self) -> None:
-        with RegistryFixture() as fixture:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(CAPELRY_SCRIPT),
-                    "--registry",
-                    fixture.url,
-                    "search",
-                    "skill",
-                    "--api",
-                    "legacy",
-                    "--limit",
-                    "1",
-                    "--json",
-                ],
-                check=True,
-                text=True,
-                capture_output=True,
-                env=clean_env(),
-            )
+    def test_api_selector_flag_is_no_longer_accepted(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CAPELRY_SCRIPT),
+                "search",
+                "skill",
+                "--api",
+                "ard",
+            ],
+            text=True,
+            capture_output=True,
+            env=clean_env(),
+        )
 
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["registry"], fixture.url)
-        self.assertEqual(payload["count"], 1)
-        self.assertEqual(payload["capabilities"][0]["ref"], "capelry/demo-skill")
-        self.assertTrue(RegistryFixtureHandler.legacy_requests)
-
-    def test_env_can_explicitly_select_legacy_search(self) -> None:
-        with RegistryFixture() as fixture:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(CAPELRY_SCRIPT),
-                    "--registry",
-                    fixture.url,
-                    "search",
-                    "skill",
-                    "--limit",
-                    "1",
-                    "--json",
-                ],
-                check=True,
-                text=True,
-                capture_output=True,
-                env=clean_env(CAPELRY_USE_LEGACY_API="1"),
-            )
-
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["capabilities"][0]["ref"], "capelry/demo-skill")
-        self.assertTrue(RegistryFixtureHandler.legacy_requests)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unrecognized arguments: --api", result.stderr)
 
     def test_fixture_server_emulates_ard_search_endpoint(self) -> None:
         with RegistryFixture() as fixture:
@@ -412,7 +337,7 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertEqual(payload["entries"][0]["score"], 91)
         self.assertEqual(payload["entries"][0]["source"], "http://fixture-registry.test")
         self.assertEqual(payload["entries"][0]["trustState"], "source-hosted")
-        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         request = RegistryFixtureHandler.ard_requests[0]
         self.assertEqual(request["query"]["text"], "ard skill")
         self.assertEqual(request["federation"], "none")
@@ -451,9 +376,9 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ARD INVALID_ARGUMENT", result.stderr)
         self.assertIn("bad ARD filter", result.stderr)
-        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        self.assertFalse(RegistryFixtureHandler.unexpected_requests)
 
-    def test_default_search_falls_back_to_legacy_when_ard_endpoint_is_missing(self) -> None:
+    def test_default_search_reports_ard_error_when_endpoint_is_missing(self) -> None:
         with RegistryFixture() as fixture:
             result = subprocess.run(
                 [
@@ -465,29 +390,6 @@ class CapelryScriptTests(unittest.TestCase):
                     "missing-ard",
                     "--json",
                 ],
-                check=True,
-                text=True,
-                capture_output=True,
-                env=clean_env(),
-            )
-
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["capabilities"][0]["ref"], "capelry/demo-skill")
-        self.assertTrue(RegistryFixtureHandler.legacy_requests)
-
-    def test_explicit_ard_search_does_not_fallback_when_endpoint_is_missing(self) -> None:
-        with RegistryFixture() as fixture:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(CAPELRY_SCRIPT),
-                    "--registry",
-                    fixture.url,
-                    "search",
-                    "missing-ard",
-                    "--api",
-                    "ard",
-                ],
                 text=True,
                 capture_output=True,
                 env=clean_env(),
@@ -495,7 +397,7 @@ class CapelryScriptTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ARD NOT_FOUND", result.stderr)
-        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        self.assertFalse(RegistryFixtureHandler.unexpected_requests)
 
     def test_ard_info_resolves_identifier_through_agents_endpoint(self) -> None:
         with RegistryFixture() as fixture:
@@ -517,12 +419,12 @@ class CapelryScriptTests(unittest.TestCase):
 
         payload = json.loads(result.stdout)
         self.assertEqual(payload["entry"]["mediaType"], "application/vnd.capelry.skill-source+json")
-        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         self.assertTrue(RegistryFixtureHandler.agents_requests)
         query = urllib.parse.parse_qs(urllib.parse.urlparse(RegistryFixtureHandler.agents_requests[0]).query)
         self.assertIn("identifier", query["filter"][0])
 
-    def test_ard_info_resolves_legacy_ref_through_metadata_alias_by_default(self) -> None:
+    def test_ard_info_resolves_slug_through_metadata_alias_by_default(self) -> None:
         with RegistryFixture() as fixture:
             result = subprocess.run(
                 [
@@ -543,11 +445,36 @@ class CapelryScriptTests(unittest.TestCase):
             )
 
         payload = json.loads(result.stdout)
-        self.assertEqual(payload["entry"]["legacyRef"], "capelry/demo-skill")
+        self.assertEqual(payload["entry"]["slug"], "capelry/demo-skill")
         self.assertIn("install capelry/demo-skill --target pi-project", payload["entry"]["installSnippet"])
-        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         query = urllib.parse.parse_qs(urllib.parse.urlparse(RegistryFixtureHandler.agents_requests[0]).query)
-        self.assertIn("metadata.com.capelry.legacyRef", query["filter"][0])
+        self.assertIn("metadata.com.capelry.slug", query["filter"][0])
+
+    def test_bulk_info_resolves_each_ref_with_ard_agents(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "bulk-info",
+                    "capelry/demo-skill",
+                    "capelry/zip-skill",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["api"], "ard")
+        self.assertEqual([item["slug"] for item in payload["shortlist"]], ["capelry/demo-skill", "capelry/zip-skill"])
+        self.assertEqual(len(RegistryFixtureHandler.agents_requests), 2)
+        self.assertFalse(RegistryFixtureHandler.unexpected_requests)
 
     def test_discover_uses_ard_search_by_default(self) -> None:
         with RegistryFixture() as fixture:
@@ -573,7 +500,7 @@ class CapelryScriptTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["api"], "ard")
         self.assertEqual(payload["entries"][0]["displayName"], "Demo ARD Skill")
-        self.assertFalse(RegistryFixtureHandler.legacy_requests)
+        self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         self.assertTrue(RegistryFixtureHandler.ard_requests)
 
     def test_ard_zip_install_verifies_checksum_and_extracts_safely(self) -> None:
@@ -599,7 +526,9 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertTrue((dest / "SKILL.md").exists())
             self.assertIn("trust: checksum-only", result.stdout)
             self.assertIn("checksum:", result.stdout)
-            self.assertFalse(RegistryFixtureHandler.legacy_requests)
+            self.assertFalse(RegistryFixtureHandler.unexpected_requests)
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(RegistryFixtureHandler.agents_requests[0]).query)
+            self.assertIn("metadata.com.capelry.slug", query["filter"][0])
 
     def test_ard_zip_install_rejects_checksum_mismatch(self) -> None:
         with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
@@ -706,9 +635,18 @@ class CapelryScriptTests(unittest.TestCase):
         catalog = json.loads(SELF_CATALOG.read_text(encoding="utf-8"))
         self.assertEqual(catalog["specVersion"], "1.0")
         self.assertEqual(catalog["host"]["identifier"], "https://github.com/capelry-ai/capelry-skills")
+        manifest = SELF_CAPABILITY.read_text(encoding="utf-8")
+        manifest_version = next(
+            line.split(":", 1)[1].strip()
+            for line in manifest.splitlines()
+            if line.strip().startswith("version:")
+        )
+        self.assertEqual(manifest_version, "2.0.1")
+        self.assertIn(f"capelry-{manifest_version}.zip", manifest)
         entries = catalog["entries"]
         self.assertEqual(len(entries), 1)
         entry = entries[0]
+        self.assertEqual(entry["version"], manifest_version)
         for field in ("identifier", "displayName", "type", "description", "metadata", "trustManifest"):
             self.assertIn(field, entry)
         self.assertTrue(entry["identifier"].startswith("urn:ai:"))
@@ -716,7 +654,9 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertEqual(("url" in entry) + ("data" in entry), 1)
         self.assertEqual(entry["data"]["repository"], "https://github.com/capelry-ai/capelry-skills")
         self.assertEqual(entry["data"]["path"], "skills/capelry")
-        self.assertEqual(entry["metadata"]["com.capelry.legacyRef"], "capelry/capelry")
+        self.assertEqual(entry["metadata"]["com.capelry.slug"], "capelry/capelry")
+        removed_metadata_key = "com.capelry." + "legacy" + "Ref"
+        self.assertNotIn(removed_metadata_key, entry["metadata"])
         self.assertEqual(entry["metadata"]["com.capelry.trustState"], "source-hosted")
         self.assertLessEqual(len(entry["representativeQueries"]), 10)
         for value in entry["metadata"].values():
