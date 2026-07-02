@@ -88,7 +88,7 @@ Useful options:
 
 ```text
 python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref main --target agents-project
-python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref v2.0.1 --target agents-project  # example published release tag
+python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref vX.Y.Z --target agents-project  # example published release tag
 python3 scripts/bootstrap.py --target pi-project
 python3 scripts/bootstrap.py --target claude-project
 python3 scripts/bootstrap.py --target codex-project
@@ -201,7 +201,13 @@ python3 <capelry-skill-dir>/scripts/capelry.py self-update --yes
 Search Capelry through ARD:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py search "skill creator" --type skill --status passed
+python3 <capelry-skill-dir>/scripts/capelry.py search "skill creator" --type skill --trust-state source-hosted
+```
+
+Explore catalog-aware facet buckets:
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py explore "skill creator" --field metadata.com.capelry.catalogPath --limit 10
 ```
 
 Build a discovery shortlist for a task:
@@ -213,33 +219,33 @@ python3 <capelry-skill-dir>/scripts/capelry.py discover "feature planning skills
 Inspect one capability before installing:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py info openai/skill-creator --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet pi-project
 ```
 
-Capelry v2.0.1 and later use ARD discovery only. Human `namespace/name` refs resolve through ARD slug metadata, so use `info` for each shortlisted slug or URN before installing:
+Capelry v2.0.6 and later use catalog-aware ARD discovery only. Human refs use `namespace/catalog/resource` slug metadata, so use `info` for each shortlisted slug or URN before installing:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py info openai/skill-creator --install-snippet pi-project
-python3 <capelry-skill-dir>/scripts/capelry.py info capelry/capelry --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info urn:ai:github.com:capelry-ai:capelry-skills:skills:capelry --install-snippet pi-project
 ```
 
 Install a skill into the portable project location:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py install openai/skill-creator --target agents-project
+python3 <capelry-skill-dir>/scripts/capelry.py install capelry-ai/capelry-skills/capelry --target agents-project
 ```
 
 Install into Pi project skills instead:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py install openai/skill-creator --target pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py install capelry-ai/capelry-skills/capelry --target pi-project
 ```
 
 PowerShell examples:
 
 ```powershell
 py <capelry-skill-dir>/scripts/capelry.py search "skill creator"
-py <capelry-skill-dir>/scripts/capelry.py install openai/skill-creator --target pi-project
+py <capelry-skill-dir>/scripts/capelry.py install capelry-ai/capelry-skills/capelry --target pi-project
 ```
 
 ## Manual install fallback

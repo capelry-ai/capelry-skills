@@ -14,23 +14,29 @@
         "repository": "https://github.com/capelry-ai/capelry-skills",
         "path": "skills/capelry",
         "ref": "main",
-        "archiveUrl": "https://codeload.github.com/capelry-ai/capelry-skills/zip/main"
+        "archiveUrl": "https://codeload.github.com/capelry-ai/capelry-skills/zip/main",
+        "defaultInstallName": "capelry"
       },
-      "description": "Reference ARD discovery and install client for agent coding environments. Bootstraps from GitHub source, searches Capelry with ARD by default, inspects trust metadata, and installs supported skill media types.",
-      "tags": ["ard", "ai-catalog", "capelry", "skill", "registry", "bootstrap"],
-      "capabilities": ["search", "discover", "inspect", "install", "bootstrap", "self-update"],
+      "description": "Reference ARD discovery and install client for agent coding environments. Bootstraps from GitHub source, searches catalog-aware Capelry ARD routes, explores facets, inspects trust metadata, and installs supported skill media types.",
+      "tags": ["ard", "ai-catalog", "catalog", "capelry", "skill", "registry", "bootstrap"],
+      "capabilities": ["search", "explore", "discover", "inspect", "install", "bootstrap", "self-update"],
       "representativeQueries": [
         "search an ARD registry from an agent",
         "install a Capelry skill into Pi",
+        "explore Capelry catalog facets",
         "bootstrap capability discovery into a fresh coding project"
       ],
-      "version": "2.0.1",
-      "updatedAt": "2026-06-21T00:00:00Z",
+      "version": "2.0.8",
+      "updatedAt": "2026-07-02T00:00:00Z",
       "metadata": {
         "com.capelry.packageType": "skill",
-        "com.capelry.slug": "capelry/capelry",
+        "com.capelry.slug": "capelry-ai/capelry-skills/capelry",
+        "com.capelry.catalogPath": "capelry-ai/capelry-skills",
+        "com.capelry.catalogSlug": "capelry-skills",
+        "com.capelry.catalogUrl": "https://github.com/capelry-ai/capelry-skills",
         "com.capelry.trustState": "source-hosted",
         "com.capelry.sourceRepository": "https://github.com/capelry-ai/capelry-skills",
+        "com.capelry.sourceRepositoryFullName": "capelry-ai/capelry-skills",
         "com.capelry.sourcePath": "skills/capelry",
         "com.capelry.installTargets": "agents-project,pi-project,claude-project,codex-project"
       },
