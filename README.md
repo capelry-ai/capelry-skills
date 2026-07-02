@@ -188,27 +188,27 @@ For Pi project-local installs:
 
 ```text
 python3 .pi/skills/capelry/scripts/capelry.py discover "feature planning skills" --query "feature planning,feature,prd,implementation plan" --top 5 --install-snippet pi-project
-python3 .pi/skills/capelry/scripts/capelry.py search "skill creator" --type skill --status passed
-python3 .pi/skills/capelry/scripts/capelry.py info openai/skill-creator --install-snippet pi-project
-python3 .pi/skills/capelry/scripts/capelry.py info capelry/capelry --install-snippet pi-project
-python3 .pi/skills/capelry/scripts/capelry.py install openai/skill-creator --target pi-project
+python3 .pi/skills/capelry/scripts/capelry.py search "skill creator" --type skill --trust-state source-hosted
+python3 .pi/skills/capelry/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet pi-project
+python3 .pi/skills/capelry/scripts/capelry.py install capelry-ai/capelry-skills/capelry --target pi-project
 ```
 
 For portable Agent Skills installs:
 
 ```text
-python3 .agents/skills/capelry/scripts/capelry.py search "skill creator" --type skill --status passed
-python3 .agents/skills/capelry/scripts/capelry.py info openai/skill-creator --install-snippet agents-project
-python3 .agents/skills/capelry/scripts/capelry.py install openai/skill-creator --target agents-project
+python3 .agents/skills/capelry/scripts/capelry.py search "skill creator" --type skill --trust-state source-hosted
+python3 .agents/skills/capelry/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet agents-project
+python3 .agents/skills/capelry/scripts/capelry.py install capelry-ai/capelry-skills/capelry --target agents-project
 ```
 
-Agent-friendly discovery output is available with filters and JSON. `search`, `discover`, `info`, and supported `install` flows use ARD endpoints (`POST /search` and `GET /agents`). Human `namespace/name` refs resolve through ARD slug metadata (`metadata.com.capelry.slug`):
+Agent-friendly discovery output is available with filters and JSON. `search`, `explore`, `discover`, `info`, and supported `install` flows use ARD endpoints (`POST /search`, `POST /explore`, and `GET /agents`). Human refs are catalog-aware `namespace/catalog/resource` slugs resolved through `metadata.com.capelry.slug`:
 
 ```text
 python3 .pi/skills/capelry/scripts/capelry.py discover "production readiness" --top 5 --install-snippet pi-project --json
+python3 .pi/skills/capelry/scripts/capelry.py explore "production readiness" --field metadata.com.capelry.catalogPath --limit 10
 python3 .pi/skills/capelry/scripts/capelry.py search "skill creator" --type skill --trust-state source-hosted --json
-python3 .pi/skills/capelry/scripts/capelry.py info capelry/capelry --install-snippet pi-project --json
-python3 .pi/skills/capelry/scripts/capelry.py install openai/skill-creator --target pi-project
+python3 .pi/skills/capelry/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet pi-project --json
+python3 .pi/skills/capelry/scripts/capelry.py install capelry-ai/capelry-skills/capelry --target pi-project
 ```
 
 Check and update the installed Capelry skill itself:
@@ -228,14 +228,14 @@ python3 <capelry-skill-dir>/scripts/capelry.py version
 python3 <capelry-skill-dir>/scripts/capelry.py version --check
 python3 <capelry-skill-dir>/scripts/capelry.py self-update --dry-run
 python3 <capelry-skill-dir>/scripts/capelry.py self-update --yes
-python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref v2.0.1 --yes
+python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref vX.Y.Z --yes
 ```
 
 Self-update is opt-in and filesystem-writing: it prompts in interactive terminals and requires `--yes` for non-interactive runs. It is intended for installed skill copies; use `git` to update this source checkout unless you explicitly pass `--allow-source-checkout`. Existing pre-1.1.0 installs need one manual re-bootstrap/reinstall to get the `self-update` command. Reload or restart your agent afterward. If GitHub API rate limits are hit, set `CAPELRY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`.
 
 ## Release versioning
 
-Release GitHub tags and releases as stable `vX.X.X` refs, for example `v2.0.1`. Keep `skills/capelry/capability.yaml` at the matching registry package version without the `v` prefix, for example `2.0.1`.
+Release GitHub tags and releases as stable `vX.X.X` refs, for example `v2.0.8`. Keep `skills/capelry/capability.yaml` at the matching registry package version without the `v` prefix, for example `2.0.8`.
 
 Recommended release flow:
 
@@ -256,7 +256,7 @@ python3 -m unittest discover -s tests
 python3 -m py_compile skills/capelry/scripts/capelry.py skills/capelry/scripts/bootstrap.py
 ```
 
-The fixture HTTP server in `tests/test_capelry_scripts.py` emulates ARD `/search`, `/agents`, and archive responses so the client can evolve without third-party Python test dependencies.
+The fixture HTTP server in `tests/test_capelry_scripts.py` emulates ARD `/search`, `/explore`, `/agents`, and archive responses so the client can evolve without third-party Python test dependencies.
 
 ## Registry URL
 

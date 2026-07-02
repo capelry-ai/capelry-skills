@@ -50,7 +50,7 @@ def eprint(*parts: object) -> None:
 
 
 def fetch_bytes(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "capelry-bootstrap/2.0.1"})
+    request = urllib.request.Request(url, headers={"User-Agent": "capelry-bootstrap/2.0.8"})
     try:
         with urllib.request.urlopen(request) as response:
             return response.read()

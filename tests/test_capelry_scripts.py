@@ -95,9 +95,14 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
             "description": "Fixture skill returned by ARD.",
             "source": "http://fixture-registry.test",
             "metadata": {
+                "com.capelry.packageType": "skill",
                 "com.capelry.trustState": "source-hosted",
-                "com.capelry.slug": "capelry/demo-skill",
+                "com.capelry.slug": "capelry-ai/capelry-skills/demo-skill",
+                "com.capelry.catalogPath": "capelry-ai/capelry-skills",
+                "com.capelry.catalogSlug": "capelry-skills",
+                "com.capelry.catalogUrl": "https://github.com/capelry-ai/capelry-skills",
                 "com.capelry.sourceRepository": "https://github.com/capelry-ai/capelry-skills",
+                "com.capelry.sourceRepositoryFullName": "capelry-ai/capelry-skills",
             },
             "trustManifest": {
                 "identity": "urn:ai:github.com:capelry-ai:capelry-skills:demo-skill",
@@ -114,8 +119,11 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     "type": "application/vnd.capelry.skill+zip",
                     "url": f"{base}/archives/good.zip",
                     "metadata": {
+                        "com.capelry.packageType": "skill",
                         "com.capelry.trustState": "checksum-only",
-                        "com.capelry.slug": "capelry/zip-skill",
+                        "com.capelry.slug": "capelry-ai/capelry-skills/zip-skill",
+                        "com.capelry.catalogPath": "capelry-ai/capelry-skills",
+                        "com.capelry.catalogSlug": "capelry-skills",
                         "com.capelry.archiveUrl": f"{base}/archives/good.zip",
                         "com.capelry.archiveChecksumSha256": hashlib.sha256(archive).hexdigest(),
                     },
@@ -129,8 +137,11 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     "type": "application/vnd.capelry.skill+zip",
                     "url": f"{base}/archives/good.zip",
                     "metadata": {
+                        "com.capelry.packageType": "skill",
                         "com.capelry.trustState": "checksum-only",
-                        "com.capelry.slug": "capelry/bad-checksum",
+                        "com.capelry.slug": "capelry-ai/capelry-skills/bad-checksum",
+                        "com.capelry.catalogPath": "capelry-ai/capelry-skills",
+                        "com.capelry.catalogSlug": "capelry-skills",
                         "com.capelry.archiveUrl": f"{base}/archives/good.zip",
                         "com.capelry.archiveChecksumSha256": "0" * 64,
                     },
@@ -144,8 +155,11 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     "type": "application/vnd.capelry.skill+zip",
                     "url": f"{base}/archives/unsafe.zip",
                     "metadata": {
+                        "com.capelry.packageType": "skill",
                         "com.capelry.trustState": "checksum-only",
-                        "com.capelry.slug": "capelry/unsafe-zip",
+                        "com.capelry.slug": "capelry-ai/capelry-skills/unsafe-zip",
+                        "com.capelry.catalogPath": "capelry-ai/capelry-skills",
+                        "com.capelry.catalogSlug": "capelry-skills",
                         "com.capelry.archiveUrl": f"{base}/archives/unsafe.zip",
                         "com.capelry.archiveChecksumSha256": hashlib.sha256(self.unsafe_skill_zip()).hexdigest(),
                     },
@@ -164,8 +178,11 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                         "archiveUrl": f"{base}/archives/source.zip",
                     },
                     "metadata": {
+                        "com.capelry.packageType": "skill",
                         "com.capelry.trustState": "source-hosted",
-                        "com.capelry.slug": "capelry/source-skill",
+                        "com.capelry.slug": "capelry-ai/capelry-skills/source-skill",
+                        "com.capelry.catalogPath": "capelry-ai/capelry-skills",
+                        "com.capelry.catalogSlug": "capelry-skills",
                     },
                 }
             )
@@ -178,7 +195,9 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     "url": f"{base}/openapi.json",
                     "metadata": {
                         "com.capelry.trustState": "unsigned",
-                        "com.capelry.slug": "capelry/unsupported",
+                        "com.capelry.slug": "capelry-ai/capelry-skills/unsupported",
+                        "com.capelry.catalogPath": "capelry-ai/capelry-skills",
+                        "com.capelry.catalogSlug": "capelry-skills",
                     },
                 }
             )
@@ -233,6 +252,25 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 self.send_json({"errorCode": "NOT_FOUND", "message": "ARD search unavailable"}, status=404)
                 return
             self.send_json({"results": [self.ard_entry(score=91)], "referrals": []})
+            return
+
+        if self.path == "/explore":
+            self.ard_requests.append(body)
+            self.send_json(
+                {
+                    "resultType": "facets",
+                    "facets": {
+                        "metadata.com.capelry.catalogPath": {
+                            "buckets": [{"value": "capelry-ai/capelry-skills", "count": 3}],
+                            "otherCount": 0,
+                        },
+                        "type": {
+                            "buckets": [{"value": "application/vnd.capelry.skill-source+json", "count": 1}],
+                            "otherCount": 0,
+                        },
+                    },
+                }
+            )
             return
 
         self.send_json({"error": "not found"}, status=404)
@@ -315,10 +353,10 @@ class CapelryScriptTests(unittest.TestCase):
                     "github.com",
                     "--trust-state",
                     "source-hosted",
-                    "--domain",
-                    "devops",
-                    "--phase",
-                    "production",
+                    "--catalog",
+                    "capelry-ai/capelry-skills",
+                    "--source",
+                    "capelry-ai/capelry-skills",
                     "--filter",
                     "tags=ard,skill",
                     "--json",
@@ -336,6 +374,9 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertEqual(payload["entries"][0]["mediaType"], "application/vnd.capelry.skill-source+json")
         self.assertEqual(payload["entries"][0]["score"], 91)
         self.assertEqual(payload["entries"][0]["source"], "http://fixture-registry.test")
+        self.assertEqual(payload["entries"][0]["sourceRepositoryFullName"], "capelry-ai/capelry-skills")
+        self.assertEqual(payload["entries"][0]["catalogPath"], "capelry-ai/capelry-skills")
+        self.assertEqual(payload["entries"][0]["page"], f"{fixture.url}/c/capelry-ai/capelry-skills/demo-skill")
         self.assertEqual(payload["entries"][0]["trustState"], "source-hosted")
         self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         request = RegistryFixtureHandler.ard_requests[0]
@@ -353,9 +394,75 @@ class CapelryScriptTests(unittest.TestCase):
         )
         self.assertEqual(filters["publisher"], ["github.com"])
         self.assertEqual(filters["metadata.com.capelry.trustState"], ["source-hosted"])
-        self.assertEqual(filters["metadata.com.capelry.domains"], ["devops"])
-        self.assertEqual(filters["metadata.com.capelry.lifecyclePhases"], ["production"])
+        self.assertEqual(filters["metadata.com.capelry.catalogPath"], ["capelry-ai/capelry-skills"])
+        self.assertEqual(filters["metadata.com.capelry.sourceRepositoryFullName"], ["capelry-ai/capelry-skills"])
         self.assertEqual(filters["tags"], ["ard", "skill"])
+
+    def test_legacy_status_domain_phase_flags_are_not_sent_to_ard(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "ard skill",
+                    "--status",
+                    "passed",
+                    "--domain",
+                    "devops",
+                    "--phase",
+                    "production",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        self.assertIn("were not sent", result.stderr)
+        request = RegistryFixtureHandler.ard_requests[0]
+        filters = request.get("query", {}).get("filter", {})
+        self.assertNotIn("metadata.com.capelry.validationStatus", filters)
+        self.assertNotIn("metadata.com.capelry.domains", filters)
+        self.assertNotIn("metadata.com.capelry.lifecyclePhases", filters)
+
+    def test_explore_posts_catalog_facet_request(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "explore",
+                    "ard skill",
+                    "--field",
+                    "metadata.com.capelry.catalogPath,type",
+                    "--limit",
+                    "5",
+                    "--catalog",
+                    "capelry-ai/capelry-skills",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["api"], "ard")
+        self.assertIn("metadata.com.capelry.catalogPath", payload["facets"])
+        request = RegistryFixtureHandler.ard_requests[0]
+        self.assertEqual(request["query"]["text"], "ard skill")
+        self.assertEqual(request["query"]["filter"]["metadata.com.capelry.catalogPath"], ["capelry-ai/capelry-skills"])
+        self.assertEqual(
+            [facet["field"] for facet in request["resultType"]["facets"]],
+            ["metadata.com.capelry.catalogPath", "type"],
+        )
 
     def test_ard_error_shape_is_reported_clearly(self) -> None:
         with RegistryFixture() as fixture:
@@ -433,7 +540,7 @@ class CapelryScriptTests(unittest.TestCase):
                     "--registry",
                     fixture.url,
                     "info",
-                    "capelry/demo-skill",
+                    "capelry-ai/capelry-skills/demo-skill",
                     "--install-snippet",
                     "pi-project",
                     "--json",
@@ -445,8 +552,10 @@ class CapelryScriptTests(unittest.TestCase):
             )
 
         payload = json.loads(result.stdout)
-        self.assertEqual(payload["entry"]["slug"], "capelry/demo-skill")
-        self.assertIn("install capelry/demo-skill --target pi-project", payload["entry"]["installSnippet"])
+        self.assertEqual(payload["entry"]["slug"], "capelry-ai/capelry-skills/demo-skill")
+        self.assertEqual(payload["entry"]["catalogPath"], "capelry-ai/capelry-skills")
+        self.assertEqual(payload["entry"]["page"], f"{fixture.url}/c/capelry-ai/capelry-skills/demo-skill")
+        self.assertIn("install capelry-ai/capelry-skills/demo-skill --target pi-project", payload["entry"]["installSnippet"])
         self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         query = urllib.parse.parse_qs(urllib.parse.urlparse(RegistryFixtureHandler.agents_requests[0]).query)
         self.assertIn("metadata.com.capelry.slug", query["filter"][0])
@@ -460,8 +569,8 @@ class CapelryScriptTests(unittest.TestCase):
                     "--registry",
                     fixture.url,
                     "bulk-info",
-                    "capelry/demo-skill",
-                    "capelry/zip-skill",
+                    "capelry-ai/capelry-skills/demo-skill",
+                    "capelry-ai/capelry-skills/zip-skill",
                     "--json",
                 ],
                 check=True,
@@ -472,7 +581,7 @@ class CapelryScriptTests(unittest.TestCase):
 
         payload = json.loads(result.stdout)
         self.assertEqual(payload["api"], "ard")
-        self.assertEqual([item["slug"] for item in payload["shortlist"]], ["capelry/demo-skill", "capelry/zip-skill"])
+        self.assertEqual([item["slug"] for item in payload["shortlist"]], ["capelry-ai/capelry-skills/demo-skill", "capelry-ai/capelry-skills/zip-skill"])
         self.assertEqual(len(RegistryFixtureHandler.agents_requests), 2)
         self.assertFalse(RegistryFixtureHandler.unexpected_requests)
 
@@ -503,6 +612,15 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         self.assertTrue(RegistryFixtureHandler.ard_requests)
 
+    def test_three_segment_slug_install_name_uses_resource_segment(self) -> None:
+        capelry = load_module("capelry_cli_install_name", CAPELRY_SCRIPT)
+        entry = {
+            "metadata": {"com.capelry.slug": "owner/catalog/resource-name"},
+            "identifier": "urn:ai:example:owner:catalog:resource-name",
+        }
+
+        self.assertEqual(capelry.ard_entry_install_name(entry, "owner/catalog/resource-name"), "resource-name")
+
     def test_ard_zip_install_verifies_checksum_and_extracts_safely(self) -> None:
         with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
             dest = Path(tmpdir) / "zip-skill"
@@ -513,7 +631,7 @@ class CapelryScriptTests(unittest.TestCase):
                     "--registry",
                     fixture.url,
                     "install",
-                    "capelry/zip-skill",
+                    "capelry-ai/capelry-skills/zip-skill",
                     "--dest",
                     str(dest),
                 ],
@@ -540,7 +658,7 @@ class CapelryScriptTests(unittest.TestCase):
                     "--registry",
                     fixture.url,
                     "install",
-                    "capelry/bad-checksum",
+                    "capelry-ai/capelry-skills/bad-checksum",
                     "--dest",
                     str(dest),
                 ],
@@ -568,7 +686,7 @@ class CapelryScriptTests(unittest.TestCase):
                     "--registry",
                     fixture.url,
                     "install",
-                    "capelry/unsafe-zip",
+                    "capelry-ai/capelry-skills/unsafe-zip",
                     "--dest",
                     str(dest),
                 ],
@@ -591,7 +709,7 @@ class CapelryScriptTests(unittest.TestCase):
                     "--registry",
                     fixture.url,
                     "install",
-                    "capelry/source-skill",
+                    "capelry-ai/capelry-skills/source-skill",
                     "--dest",
                     str(dest),
                     "--json",
@@ -617,7 +735,7 @@ class CapelryScriptTests(unittest.TestCase):
                     "--registry",
                     fixture.url,
                     "install",
-                    "capelry/unsupported",
+                    "capelry-ai/capelry-skills/unsupported",
                     "--dest",
                     str(dest),
                 ],
@@ -641,7 +759,7 @@ class CapelryScriptTests(unittest.TestCase):
             for line in manifest.splitlines()
             if line.strip().startswith("version:")
         )
-        self.assertEqual(manifest_version, "2.0.1")
+        self.assertEqual(manifest_version, "2.0.8")
         self.assertIn(f"capelry-{manifest_version}.zip", manifest)
         entries = catalog["entries"]
         self.assertEqual(len(entries), 1)
@@ -654,7 +772,11 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertEqual(("url" in entry) + ("data" in entry), 1)
         self.assertEqual(entry["data"]["repository"], "https://github.com/capelry-ai/capelry-skills")
         self.assertEqual(entry["data"]["path"], "skills/capelry")
-        self.assertEqual(entry["metadata"]["com.capelry.slug"], "capelry/capelry")
+        self.assertEqual(entry["data"]["defaultInstallName"], "capelry")
+        self.assertEqual(entry["metadata"]["com.capelry.slug"], "capelry-ai/capelry-skills/capelry")
+        self.assertEqual(entry["metadata"]["com.capelry.catalogPath"], "capelry-ai/capelry-skills")
+        self.assertEqual(entry["metadata"]["com.capelry.catalogSlug"], "capelry-skills")
+        self.assertEqual(entry["metadata"]["com.capelry.sourceRepositoryFullName"], "capelry-ai/capelry-skills")
         removed_metadata_key = "com.capelry." + "legacy" + "Ref"
         self.assertNotIn(removed_metadata_key, entry["metadata"])
         self.assertEqual(entry["metadata"]["com.capelry.trustState"], "source-hosted")

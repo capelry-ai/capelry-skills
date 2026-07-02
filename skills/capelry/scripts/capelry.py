@@ -21,6 +21,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+CAPELRY_SKILL_VERSION = "2.0.8"
 DEFAULT_REGISTRY = "https://capelry.com"
 SELF_GITHUB_REPOSITORY = "capelry-ai/capelry-skills"
 SELF_SOURCE_PATH = "skills/capelry"
@@ -34,14 +35,23 @@ ARD_SKILL_MEDIA_TYPES = (
 ARD_PACKAGE_TYPE_MEDIA_TYPES = {
     "skill": ARD_SKILL_MEDIA_TYPES,
 }
+ARD_PACKAGE_TYPE_FILTER = "metadata.com.capelry.packageType"
 ARD_TRUST_STATE_FILTER = "metadata.com.capelry.trustState"
-ARD_VALIDATION_STATUS_FILTER = "metadata.com.capelry.validationStatus"
 ARD_SOURCE_REPOSITORY_FILTER = "metadata.com.capelry.sourceRepository"
-ARD_DOMAIN_FILTER = "metadata.com.capelry.domains"
-ARD_PHASE_FILTER = "metadata.com.capelry.lifecyclePhases"
+ARD_SOURCE_REPOSITORY_FULL_NAME_FILTER = "metadata.com.capelry.sourceRepositoryFullName"
 ARD_SLUG_FILTER = "metadata.com.capelry.slug"
+ARD_CATALOG_PATH_FILTER = "metadata.com.capelry.catalogPath"
+ARD_CATALOG_SLUG_FILTER = "metadata.com.capelry.catalogSlug"
+ARD_CATALOG_URL_FILTER = "metadata.com.capelry.catalogUrl"
 ARD_TRUST_STATE_METADATA = "com.capelry.trustState"
+ARD_PACKAGE_TYPE_METADATA = "com.capelry.packageType"
 ARD_SLUG_METADATA = "com.capelry.slug"
+ARD_CATALOG_PATH_METADATA = "com.capelry.catalogPath"
+ARD_CATALOG_SLUG_METADATA = "com.capelry.catalogSlug"
+ARD_CATALOG_URL_METADATA = "com.capelry.catalogUrl"
+ARD_SOURCE_REPOSITORY_METADATA = "com.capelry.sourceRepository"
+ARD_SOURCE_REPOSITORY_FULL_NAME_METADATA = "com.capelry.sourceRepositoryFullName"
+HTTP_USER_AGENT = f"capelry-skill/{CAPELRY_SKILL_VERSION}"
 
 TARGET_ROOTS = {
     "agents-project": ".agents/skills",
@@ -141,7 +151,7 @@ def api_url(base: str, path: str) -> str:
     return f"{base}{path if path.startswith('/') else '/' + path}"
 
 
-def http_headers(url: str, *, user_agent: str = "capelry-skill/2.0.1") -> dict[str, str]:
+def http_headers(url: str, *, user_agent: str = HTTP_USER_AGENT) -> dict[str, str]:
     headers = {"User-Agent": user_agent}
     parsed = urllib.parse.urlparse(url)
     if parsed.netloc.lower() == "api.github.com":
@@ -219,7 +229,7 @@ def post_json(url: str, payload: dict[str, Any]) -> Any:
         url,
         data=body,
         headers={
-            "User-Agent": "capelry-skill/2.0.1",
+            "User-Agent": HTTP_USER_AGENT,
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
@@ -278,7 +288,7 @@ def post_ard_json(url: str, payload: dict[str, Any]) -> Any:
         url,
         data=body,
         headers={
-            "User-Agent": "capelry-skill/2.0.1",
+            "User-Agent": HTTP_USER_AGENT,
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
@@ -301,10 +311,10 @@ def print_json(payload: Any) -> None:
 def parse_ref(value: str) -> tuple[str, str, str | None]:
     ref, _, version = value.partition("@")
     if "/" not in ref:
-        raise SystemExit("Capability ref must be namespace/name, optionally namespace/name@version")
+        raise SystemExit("Capability ref must be an ARD slug such as namespace/catalog/resource, optionally @version")
     namespace, name = ref.split("/", 1)
     if not namespace or not name:
-        raise SystemExit("Capability ref must be namespace/name")
+        raise SystemExit("Capability ref must be an ARD slug such as namespace/catalog/resource")
     return namespace, name, version or None
 
 
@@ -424,6 +434,28 @@ def parse_ard_filter_arg(value: str) -> tuple[str, list[str]]:
     return field.strip(), split_arg_values([raw_value])
 
 
+def github_full_name_filter(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip().removesuffix(".git").strip("/")
+    match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$", raw, re.IGNORECASE)
+    if match:
+        return f"{match.group('owner')}/{match.group('repo')}".lower()
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw):
+        return raw.lower()
+    return None
+
+
+def add_source_filter(filters: dict[str, list[str]], value: str | None) -> None:
+    if not value:
+        return
+    full_name = github_full_name_filter(value)
+    if full_name:
+        add_ard_filter(filters, ARD_SOURCE_REPOSITORY_FULL_NAME_FILTER, full_name)
+    else:
+        add_ard_filter(filters, ARD_SOURCE_REPOSITORY_FILTER, value)
+
+
 def build_ard_filter(args: argparse.Namespace) -> dict[str, list[str]]:
     filters: dict[str, list[str]] = {}
     package_type = getattr(args, "package_type", None)
@@ -432,14 +464,29 @@ def build_ard_filter(args: argparse.Namespace) -> dict[str, list[str]]:
     add_ard_filter(filters, "type", split_arg_values(getattr(args, "media_type", None)))
     add_ard_filter(filters, "publisher", split_arg_values(getattr(args, "publisher", None)))
     add_ard_filter(filters, ARD_TRUST_STATE_FILTER, split_arg_values(getattr(args, "trust_state", None)))
-    add_ard_filter(filters, ARD_VALIDATION_STATUS_FILTER, getattr(args, "status", None))
-    add_ard_filter(filters, ARD_SOURCE_REPOSITORY_FILTER, getattr(args, "source", None))
-    add_ard_filter(filters, ARD_DOMAIN_FILTER, getattr(args, "domain", None))
-    add_ard_filter(filters, ARD_PHASE_FILTER, getattr(args, "phase", None))
+    add_source_filter(filters, getattr(args, "source", None))
+    add_ard_filter(filters, ARD_CATALOG_PATH_FILTER, split_arg_values(getattr(args, "catalog", None)))
+    add_ard_filter(filters, ARD_CATALOG_SLUG_FILTER, split_arg_values(getattr(args, "catalog_slug", None)))
+    add_ard_filter(filters, ARD_CATALOG_URL_FILTER, split_arg_values(getattr(args, "catalog_url", None)))
+    add_ard_filter(filters, ARD_SLUG_FILTER, split_arg_values(getattr(args, "slug", None)))
     for raw_filter in getattr(args, "ard_filter", None) or []:
         field, values = parse_ard_filter_arg(raw_filter)
         add_ard_filter(filters, field, values)
     return filters
+
+
+def warn_unsupported_legacy_filters(args: argparse.Namespace) -> None:
+    unsupported = []
+    for flag, attr in (("--status", "status"), ("--domain", "domain"), ("--phase", "phase")):
+        value = getattr(args, attr, None)
+        if value:
+            unsupported.append(flag)
+    if unsupported:
+        eprint(
+            "warning: current public ARD routes do not expose "
+            + ", ".join(unsupported)
+            + " filters; they were not sent. Use --type, --trust-state, --catalog, --source, or --filter on supported ARD fields."
+        )
 
 
 def ard_search_payload(args: argparse.Namespace, query: str, page_size: int | None = None) -> dict[str, Any]:
@@ -457,6 +504,51 @@ def ard_search_entries(base: str, args: argparse.Namespace, query: str, page_siz
     payload = post_ard_json(api_url(base, "/search"), ard_search_payload(args, query, page_size=page_size))
     results = payload.get("results", []) if isinstance(payload, dict) else []
     return results if isinstance(results, list) else []
+
+
+def ard_explore_payload(args: argparse.Namespace) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    query: dict[str, Any] = {}
+    if getattr(args, "query", None):
+        query["text"] = args.query
+    filters = build_ard_filter(args)
+    if filters:
+        query["filter"] = filters
+    if query:
+        payload["query"] = query
+    fields = split_arg_values(getattr(args, "field", None)) or [
+        "type",
+        ARD_PACKAGE_TYPE_FILTER,
+        ARD_TRUST_STATE_FILTER,
+        ARD_CATALOG_PATH_FILTER,
+        ARD_SOURCE_REPOSITORY_FULL_NAME_FILTER,
+    ]
+    payload["resultType"] = {
+        "facets": [{"field": field, "limit": clamp_api_search_limit(getattr(args, "limit", None)) or 10} for field in fields]
+    }
+    return payload
+
+
+def ard_explore_facets(base: str, args: argparse.Namespace) -> dict[str, Any]:
+    payload = post_ard_json(api_url(base, "/explore"), ard_explore_payload(args))
+    facets = payload.get("facets", {}) if isinstance(payload, dict) else {}
+    return facets if isinstance(facets, dict) else {}
+
+
+def print_ard_facets(facets: dict[str, Any]) -> None:
+    for field, value in facets.items():
+        print(f"{field}:")
+        buckets = value.get("buckets", []) if isinstance(value, dict) else []
+        if not isinstance(buckets, list) or not buckets:
+            print("  (no buckets)")
+            continue
+        for bucket in buckets:
+            if not isinstance(bucket, dict):
+                continue
+            print(f"  {bucket.get('value', '?')}: {bucket.get('count', 0)}")
+        other_count = value.get("otherCount") if isinstance(value, dict) else None
+        if isinstance(other_count, int) and other_count > 0:
+            print(f"  other: {other_count}")
 
 
 def ard_quote_filter_value(value: str) -> str:
@@ -491,23 +583,72 @@ def ard_entry_media_type(entry: dict[str, Any]) -> str:
     return media_type if isinstance(media_type, str) and media_type else "?"
 
 
-def ard_slug(entry: dict[str, Any]) -> str | None:
+def ard_metadata_value(entry: dict[str, Any], *keys: str) -> str | None:
     metadata = ard_metadata(entry)
-    value = metadata.get(ARD_SLUG_METADATA) or metadata.get(ARD_SLUG_FILTER)
-    return value if isinstance(value, str) and value else None
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
-def ard_entry_output(entry: dict[str, Any]) -> dict[str, Any]:
+def ard_slug(entry: dict[str, Any]) -> str | None:
+    return ard_metadata_value(entry, ARD_SLUG_METADATA, ARD_SLUG_FILTER)
+
+
+def ard_catalog_path(entry: dict[str, Any]) -> str | None:
+    return ard_metadata_value(entry, ARD_CATALOG_PATH_METADATA, ARD_CATALOG_PATH_FILTER)
+
+
+def ard_catalog_slug(entry: dict[str, Any]) -> str | None:
+    return ard_metadata_value(entry, ARD_CATALOG_SLUG_METADATA, ARD_CATALOG_SLUG_FILTER)
+
+
+def ard_catalog_url(entry: dict[str, Any]) -> str | None:
+    return ard_metadata_value(entry, ARD_CATALOG_URL_METADATA, ARD_CATALOG_URL_FILTER)
+
+
+def ard_package_type(entry: dict[str, Any]) -> str | None:
+    return ard_metadata_value(entry, ARD_PACKAGE_TYPE_METADATA, ARD_PACKAGE_TYPE_FILTER)
+
+
+def ard_source_repository(entry: dict[str, Any]) -> str | None:
+    source = entry.get("source")
+    return source if isinstance(source, str) and source else ard_metadata_value(entry, ARD_SOURCE_REPOSITORY_METADATA, ARD_SOURCE_REPOSITORY_FILTER)
+
+
+def ard_source_repository_full_name(entry: dict[str, Any]) -> str | None:
+    return ard_metadata_value(entry, ARD_SOURCE_REPOSITORY_FULL_NAME_METADATA, ARD_SOURCE_REPOSITORY_FULL_NAME_FILTER)
+
+
+def quoted_slug_path(slug: str) -> str:
+    return "/".join(urllib.parse.quote(part, safe="") for part in slug.split("/"))
+
+
+def ard_page_url(base: str, entry: dict[str, Any]) -> str | None:
+    slug = ard_slug(entry)
+    if not slug or len([part for part in slug.split("/") if part]) != 3:
+        return None
+    return api_url(base, f"/c/{quoted_slug_path(slug)}")
+
+
+def ard_entry_output(entry: dict[str, Any], base: str | None = None) -> dict[str, Any]:
     output = {
         "identifier": entry.get("identifier"),
         "displayName": entry.get("displayName"),
         "version": entry.get("version"),
         "mediaType": ard_entry_media_type(entry),
+        "packageType": ard_package_type(entry),
         "description": entry.get("description"),
         "score": entry.get("score"),
-        "source": entry.get("source"),
+        "source": ard_source_repository(entry),
+        "sourceRepositoryFullName": ard_source_repository_full_name(entry),
         "trustState": ard_trust_state(entry),
         "slug": ard_slug(entry),
+        "catalogPath": ard_catalog_path(entry),
+        "catalogSlug": ard_catalog_slug(entry),
+        "catalogUrl": ard_catalog_url(entry),
+        "page": ard_page_url(base, entry) if base else None,
     }
     return {key: value for key, value in output.items() if value is not None}
 
@@ -522,8 +663,12 @@ def print_ard_entries(entries: list[dict[str, Any]]) -> None:
         metadata = []
         if entry.get("score") is not None:
             metadata.append(f"score={entry['score']}")
-        if entry.get("source"):
-            metadata.append(f"source={entry['source']}")
+        source = ard_source_repository(entry)
+        if source:
+            metadata.append(f"source={source}")
+        catalog_path = ard_catalog_path(entry)
+        if catalog_path:
+            metadata.append(f"catalog={catalog_path}")
         trust_state = ard_trust_state(entry)
         if trust_state:
             metadata.append(f"trust={trust_state}")
@@ -541,12 +686,13 @@ def ard_resolution_field(value: str) -> str:
     return "identifier" if value.startswith("urn:ai:") else ARD_SLUG_FILTER
 
 
-def ard_detail_summary(entry: dict[str, Any], install_target: str | None = None) -> dict[str, Any]:
+def ard_detail_summary(entry: dict[str, Any], install_target: str | None = None, base: str | None = None) -> dict[str, Any]:
     metadata = ard_metadata(entry)
     identifier = entry.get("identifier") if isinstance(entry.get("identifier"), str) else "?"
     slug = ard_slug(entry)
     detail_url = metadata.get("com.capelry.detailUrl") or metadata.get("metadata.com.capelry.detailUrl")
-    source = entry.get("source") or metadata.get("com.capelry.sourceRepository") or metadata.get(ARD_SOURCE_REPOSITORY_FILTER)
+    source = ard_source_repository(entry)
+    page = detail_url if isinstance(detail_url, str) and detail_url else (ard_page_url(base, entry) if base else None)
     output = {
         "identifier": identifier,
         "name": slug or identifier,
@@ -555,7 +701,11 @@ def ard_detail_summary(entry: dict[str, Any], install_target: str | None = None)
         "mediaType": ard_entry_media_type(entry),
         "summary": entry.get("description") or entry.get("displayName") or "",
         "source": source,
-        "page": detail_url if isinstance(detail_url, str) and detail_url else None,
+        "sourceRepositoryFullName": ard_source_repository_full_name(entry),
+        "catalogPath": ard_catalog_path(entry),
+        "catalogSlug": ard_catalog_slug(entry),
+        "catalogUrl": ard_catalog_url(entry),
+        "page": page,
         "score": entry.get("score"),
         "trustState": ard_trust_state(entry),
         "slug": slug,
@@ -574,6 +724,10 @@ def print_ard_detail_summaries(summaries: list[dict[str, Any]]) -> None:
         print(f"   summary: {item.get('summary') or ''}")
         if item.get("source"):
             print(f"   source: {item['source']}")
+        if item.get("sourceRepositoryFullName"):
+            print(f"   source ref: {item['sourceRepositoryFullName']}")
+        if item.get("catalogPath"):
+            print(f"   catalog: {item['catalogPath']}")
         if item.get("page"):
             print(f"   page: {item['page']}")
         if item.get("score") is not None:
@@ -856,6 +1010,7 @@ def collect_ard_search_results(base: str, args: argparse.Namespace, queries: lis
 
 def command_search(args: argparse.Namespace) -> None:
     base = registry_base(args)
+    warn_unsupported_legacy_filters(args)
     queries = expanded_queries(args.query) if args.expand else [args.query]
     display_limit = result_limit(args.limit)
 
@@ -872,7 +1027,7 @@ def command_search(args: argparse.Namespace) -> None:
                 "count": len(entries),
                 "limit": display_limit,
                 "suggestedQueries": expanded_queries(args.query)[1:],
-                "entries": [ard_entry_output(entry) for entry in limited_entries],
+                "entries": [ard_entry_output(entry, base) for entry in limited_entries],
             }
         )
         return
@@ -882,6 +1037,19 @@ def command_search(args: argparse.Namespace) -> None:
     print_ard_entries(limited_entries)
 
 
+def command_explore(args: argparse.Namespace) -> None:
+    base = registry_base(args)
+    warn_unsupported_legacy_filters(args)
+    facets = ard_explore_facets(base, args)
+    if args.json_output:
+        print_json({"registry": base, "api": "ard", "request": ard_explore_payload(args), "facets": facets})
+        return
+    if not facets:
+        print("No ARD facet buckets found.")
+        return
+    print_ard_facets(facets)
+
+
 def command_info(args: argparse.Namespace) -> None:
     base = registry_base(args)
     entries = ard_agents_entries(base, field=ard_resolution_field(args.ref), value=args.ref, page_size=1)
@@ -889,13 +1057,13 @@ def command_info(args: argparse.Namespace) -> None:
         raise SystemExit(f"No ARD entry found for {args.ref}")
     entry = entries[0]
     if args.json_output:
-        output = ard_entry_output(entry)
+        output = ard_entry_output(entry, base)
         if args.install_snippet:
             ref = ard_slug(entry) or str(output.get("identifier") or args.ref)
             output["installSnippet"] = install_snippet(ref, args.install_snippet)
         print_json({"registry": base, "api": "ard", "entry": output})
         return
-    print_ard_detail_summaries([ard_detail_summary(entry, args.install_snippet)])
+    print_ard_detail_summaries([ard_detail_summary(entry, args.install_snippet, base)])
 
 
 def command_bulk_info(args: argparse.Namespace) -> None:
@@ -912,7 +1080,7 @@ def command_bulk_info(args: argparse.Namespace) -> None:
         if not entries:
             errors.append({"ref": ref, "code": "not_found", "message": "No ARD entry found"})
             continue
-        summaries.append(ard_detail_summary(entries[0], args.install_snippet))
+        summaries.append(ard_detail_summary(entries[0], args.install_snippet, base))
 
     if args.json_output:
         print_json({"registry": base, "api": "ard", "refs": refs, "shortlist": summaries, "errors": errors})
@@ -941,13 +1109,14 @@ def discover_queries(query: str, extra_queries: list[str] | None, expand: bool) 
 
 def command_discover(args: argparse.Namespace) -> None:
     base = registry_base(args)
+    warn_unsupported_legacy_filters(args)
     queries = discover_queries(args.query, args.extra_query, expand=not args.no_expand)
     top = min(max(args.top, 1), 25)
     api_limit = clamp_api_search_limit(max(args.search_limit, top, 25))
 
     entries = collect_ard_search_results(base, args, queries, per_query_limit=api_limit)
     shortlist = entries[:top]
-    summaries = [ard_detail_summary(entry, args.install_snippet) for entry in shortlist]
+    summaries = [ard_detail_summary(entry, args.install_snippet, base) for entry in shortlist]
     if args.json_output:
         print_json(
             {
@@ -956,7 +1125,7 @@ def command_discover(args: argparse.Namespace) -> None:
                 "query": args.query,
                 "queries": queries,
                 "filters": build_ard_filter(args),
-                "entries": [ard_entry_output(entry) for entry in shortlist],
+                "entries": [ard_entry_output(entry, base) for entry in shortlist],
                 "shortlist": summaries,
             }
         )
@@ -1266,9 +1435,13 @@ def slugify_install_name(value: str) -> str:
 
 
 def ard_entry_install_name(entry: dict[str, Any], requested_ref: str) -> str:
+    descriptor = ard_source_descriptor(entry)
+    default_name = descriptor.get("defaultInstallName") if isinstance(descriptor, dict) else None
+    if isinstance(default_name, str) and default_name.strip():
+        return slugify_install_name(default_name)
     slug = ard_slug(entry)
     if slug and "/" in slug:
-        return slug.split("/", 1)[1]
+        return slugify_install_name(slug.rsplit("/", 1)[-1])
     identifier = entry.get("identifier")
     if isinstance(identifier, str) and identifier:
         return slugify_install_name(identifier.rsplit(":", 1)[-1].rsplit("/", 1)[-1])
@@ -1784,16 +1957,40 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--media-type", action="append", help="ARD media type filter; repeat or comma-separate values")
     search.add_argument("--publisher", action="append", help="ARD publisher filter; repeat or comma-separate values")
     search.add_argument("--trust-state", action="append", help="ARD trust-state filter; repeat or comma-separate values")
+    search.add_argument("--catalog", action="append", help="Catalog path filter namespace/catalog; repeat or comma-separate values")
+    search.add_argument("--catalog-slug", action="append", help="Catalog slug filter; repeat or comma-separate values")
+    search.add_argument("--catalog-url", action="append", help="Catalog URL filter; repeat or comma-separate values")
+    search.add_argument("--slug", action="append", help="Exact resource slug namespace/catalog/resource; repeat or comma-separate values")
     search.add_argument("--filter", dest="ard_filter", action="append", help="Generic ARD filter FIELD=VALUE; repeat or comma-separate values")
     search.add_argument("--federation", choices=("none", "referrals", "auto"), default="none", help="ARD federation mode")
-    search.add_argument("--status", help="Filter by latest validation status, e.g. passed")
-    search.add_argument("--source", help="Filter by source repository, e.g. github/awesome-copilot")
-    search.add_argument("--domain", help="Filter by derived domain facet, e.g. devops, docker, sre")
-    search.add_argument("--phase", help="Filter by lifecycle facet, e.g. production, preflight, observability")
+    search.add_argument("--source", help="Filter by source repository URL or GitHub owner/repo")
+    search.add_argument("--status", help="Compatibility no-op: current public ARD routes do not expose status filters")
+    search.add_argument("--domain", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
+    search.add_argument("--phase", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
     add_install_snippet_argument(search)
     search.add_argument("--explain-relevance", action="store_true", help="Explain why each result may be relevant")
     add_json_argument(search)
     search.set_defaults(func=command_search)
+
+    explore = subparsers.add_parser("explore", help="Explore ARD facet buckets from /explore")
+    explore.add_argument("query", nargs="?", help="Optional text query for facet scoping")
+    explore.add_argument("--field", action="append", help="Facet field; repeat or comma-separate values")
+    explore.add_argument("--limit", type=int, default=10, help="Facet bucket limit")
+    explore.add_argument("--type", dest="package_type", help="Filter by package type, e.g. skill, agent, prompt")
+    explore.add_argument("--media-type", action="append", help="ARD media type filter; repeat or comma-separate values")
+    explore.add_argument("--publisher", action="append", help="ARD publisher filter; repeat or comma-separate values")
+    explore.add_argument("--trust-state", action="append", help="ARD trust-state filter; repeat or comma-separate values")
+    explore.add_argument("--catalog", action="append", help="Catalog path filter namespace/catalog; repeat or comma-separate values")
+    explore.add_argument("--catalog-slug", action="append", help="Catalog slug filter; repeat or comma-separate values")
+    explore.add_argument("--catalog-url", action="append", help="Catalog URL filter; repeat or comma-separate values")
+    explore.add_argument("--slug", action="append", help="Exact resource slug namespace/catalog/resource; repeat or comma-separate values")
+    explore.add_argument("--source", help="Filter by source repository URL or GitHub owner/repo")
+    explore.add_argument("--filter", dest="ard_filter", action="append", help="Generic ARD filter FIELD=VALUE; repeat or comma-separate values")
+    explore.add_argument("--status", help="Compatibility no-op: current public ARD routes do not expose status filters")
+    explore.add_argument("--domain", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
+    explore.add_argument("--phase", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
+    add_json_argument(explore)
+    explore.set_defaults(func=command_explore)
 
     discover = subparsers.add_parser("discover", help="Search related ARD queries, inspect top results, and print a shortlist")
     discover.add_argument("query")
@@ -1805,18 +2002,22 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--media-type", action="append", help="ARD media type filter; repeat or comma-separate values")
     discover.add_argument("--publisher", action="append", help="ARD publisher filter; repeat or comma-separate values")
     discover.add_argument("--trust-state", action="append", help="ARD trust-state filter; repeat or comma-separate values")
+    discover.add_argument("--catalog", action="append", help="Catalog path filter namespace/catalog; repeat or comma-separate values")
+    discover.add_argument("--catalog-slug", action="append", help="Catalog slug filter; repeat or comma-separate values")
+    discover.add_argument("--catalog-url", action="append", help="Catalog URL filter; repeat or comma-separate values")
+    discover.add_argument("--slug", action="append", help="Exact resource slug namespace/catalog/resource; repeat or comma-separate values")
     discover.add_argument("--filter", dest="ard_filter", action="append", help="Generic ARD filter FIELD=VALUE; repeat or comma-separate values")
     discover.add_argument("--federation", choices=("none", "referrals", "auto"), default="none", help="ARD federation mode")
-    discover.add_argument("--status", default="passed", help="Filter by validation status (default: passed)")
-    discover.add_argument("--source", help="Filter by source repository, e.g. github/awesome-copilot")
-    discover.add_argument("--domain", help="Filter by derived domain facet, e.g. devops, docker, sre")
-    discover.add_argument("--phase", help="Filter by lifecycle facet, e.g. production, preflight, observability")
+    discover.add_argument("--source", help="Filter by source repository URL or GitHub owner/repo")
+    discover.add_argument("--status", help="Compatibility no-op: current public ARD routes do not expose status filters")
+    discover.add_argument("--domain", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
+    discover.add_argument("--phase", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
     add_install_snippet_argument(discover, default="pi-project")
     add_json_argument(discover)
     discover.set_defaults(func=command_discover)
 
     info = subparsers.add_parser("info", help="Show ARD entry details")
-    info.add_argument("ref", help="ARD slug namespace/name or urn:ai:...")
+    info.add_argument("ref", help="ARD slug namespace/catalog/resource or urn:ai:...")
     add_install_snippet_argument(info)
     add_json_argument(info)
     info.set_defaults(func=command_info)
@@ -1832,7 +2033,7 @@ def build_parser() -> argparse.ArgumentParser:
     bulk_info.set_defaults(func=command_bulk_info)
 
     install = subparsers.add_parser("install", help="Install a supported skill from an ARD entry")
-    install.add_argument("ref", help="ARD slug namespace/name or urn:ai:...")
+    install.add_argument("ref", help="ARD slug namespace/catalog/resource or urn:ai:...")
     install.add_argument("--target", choices=sorted(TARGET_ROOTS), default="agents-project")
     install.add_argument("--dest", help="Exact destination directory")
     install.add_argument("--name", help="Install directory name override")
@@ -1845,7 +2046,7 @@ def build_parser() -> argparse.ArgumentParser:
         aliases=["check-update"],
         help="Show this Capelry skill version and the latest GitHub vX.X.X release/tag",
     )
-    version.add_argument("--ref", help="Compare against a specific GitHub ref or tag, e.g. v2.0.1")
+    version.add_argument("--ref", help="Compare against a specific GitHub ref or tag, e.g. vX.Y.Z")
     version.add_argument("--check", action="store_true", help="Exit with code 1 when an update is available")
     add_json_argument(version)
     version.set_defaults(func=command_version)
@@ -1855,7 +2056,7 @@ def build_parser() -> argparse.ArgumentParser:
         aliases=["update", "upgrade"],
         help="Replace this installed Capelry skill with the latest GitHub vX.X.X release/tag",
     )
-    self_update.add_argument("--ref", help="Install a specific GitHub ref or tag, e.g. v2.0.1")
+    self_update.add_argument("--ref", help="Install a specific GitHub ref or tag, e.g. vX.Y.Z")
     self_update.add_argument("--yes", "-y", action="store_true", help="Skip confirmation for non-interactive updates")
     self_update.add_argument("--dry-run", action="store_true", help="Show what would change without writing files")
     self_update.add_argument("--force", action="store_true", help="Reinstall even when the remote ref is not newer")

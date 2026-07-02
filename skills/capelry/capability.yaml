@@ -3,12 +3,12 @@ kind: Capability
 metadata:
   namespace: capelry
   name: capelry
-  version: 2.0.1
+  version: 2.0.8
   title: Capelry
 spec:
   type: skill
-  summary: Always-available bootstrap skill for searching, inspecting, installing, packaging, and self-updating Capelry capabilities.
-  description: Always-available Agent Skill integration for Capelry, the AI Agent Capability Registry. Use it to bootstrap Capelry support into fresh projects, discover capabilities, install skills into project-local or global skill directories, and keep the Capelry skill current from GitHub vX.X.X releases.
+  summary: Always-available bootstrap skill for catalog-aware search, explore, inspect, install, packaging, and self-updating Capelry capabilities.
+  description: Always-available Agent Skill integration for Capelry, the AI Agent Capability Registry. Use it to bootstrap Capelry support into fresh projects, discover catalog-aware ARD resources, explore facets, install skills into project-local or global skill directories, and keep the Capelry skill current from GitHub vX.X.X releases.
   docs:
     readme: SKILL.md
     additional:
@@ -63,19 +63,19 @@ spec:
       notes: Project-local Pi install. Use ~/.pi/agent/skills/capelry for global installs.
       commands:
         - mkdir -p .pi/skills/capelry
-        - unzip -oq capelry-2.0.1.zip -d .pi/skills/capelry
+        - unzip -oq capelry-2.0.8.zip -d .pi/skills/capelry
     - target: claude-code
       path: .claude/skills/capelry
       notes: Project-local Claude Code install. Use ~/.claude/skills/capelry for global installs.
       commands:
         - mkdir -p .claude/skills/capelry
-        - unzip -oq capelry-2.0.1.zip -d .claude/skills/capelry
+        - unzip -oq capelry-2.0.8.zip -d .claude/skills/capelry
     - target: codex-cli
       path: .agents/skills/capelry
       notes: Portable project-local install for Codex-style Skill consumers.
       commands:
         - mkdir -p .agents/skills/capelry
-        - unzip -oq capelry-2.0.1.zip -d .agents/skills/capelry
+        - unzip -oq capelry-2.0.8.zip -d .agents/skills/capelry
   source:
     repository: https://github.com/capelry-ai/capelry-skills
     path: skills/capelry
