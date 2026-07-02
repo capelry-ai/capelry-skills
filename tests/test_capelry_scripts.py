@@ -398,6 +398,30 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertEqual(filters["metadata.com.capelry.sourceRepositoryFullName"], ["capelry-ai/capelry-skills"])
         self.assertEqual(filters["tags"], ["ard", "skill"])
 
+    def test_source_url_filter_preserves_exact_source_repository_field(self) -> None:
+        with RegistryFixture() as fixture:
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "ard skill",
+                    "--source",
+                    "https://github.com/capelry-ai/capelry-skills",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        filters = RegistryFixtureHandler.ard_requests[0]["query"]["filter"]
+        self.assertEqual(filters["metadata.com.capelry.sourceRepository"], ["https://github.com/capelry-ai/capelry-skills"])
+        self.assertNotIn("metadata.com.capelry.sourceRepositoryFullName", filters)
+
     def test_legacy_status_domain_phase_flags_are_not_sent_to_ard(self) -> None:
         with RegistryFixture() as fixture:
             result = subprocess.run(

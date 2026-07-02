@@ -434,13 +434,18 @@ def parse_ard_filter_arg(value: str) -> tuple[str, list[str]]:
     return field.strip(), split_arg_values([raw_value])
 
 
+def source_value_is_url(value: str) -> bool:
+    raw = value.strip()
+    parsed = urllib.parse.urlparse(raw)
+    return bool(parsed.scheme) or raw.lower().startswith("git@") or "github.com" in raw.lower()
+
+
 def github_full_name_filter(value: str | None) -> str | None:
     if not value:
         return None
     raw = value.strip().removesuffix(".git").strip("/")
-    match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$", raw, re.IGNORECASE)
-    if match:
-        return f"{match.group('owner')}/{match.group('repo')}".lower()
+    if source_value_is_url(raw):
+        return None
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw):
         return raw.lower()
     return None
@@ -449,11 +454,12 @@ def github_full_name_filter(value: str | None) -> str | None:
 def add_source_filter(filters: dict[str, list[str]], value: str | None) -> None:
     if not value:
         return
-    full_name = github_full_name_filter(value)
+    cleaned = value.strip()
+    full_name = github_full_name_filter(cleaned)
     if full_name:
         add_ard_filter(filters, ARD_SOURCE_REPOSITORY_FULL_NAME_FILTER, full_name)
     else:
-        add_ard_filter(filters, ARD_SOURCE_REPOSITORY_FILTER, value)
+        add_ard_filter(filters, ARD_SOURCE_REPOSITORY_FILTER, cleaned)
 
 
 def build_ard_filter(args: argparse.Namespace) -> dict[str, list[str]]:
