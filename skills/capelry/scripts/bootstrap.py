@@ -32,6 +32,7 @@ DEFAULT_SOURCE_REF = "main"
 DEFAULT_SOURCE_PATHS = ("skills/capelry", ".pi/skills/capelry")
 DEFAULT_SKILLS_DIR = ".agents/skills"
 DEFAULT_SKILL_NAME = "capelry"
+DEFAULT_HTTP_USER_AGENT = "capelry-client bootstrap"
 
 TARGET_SKILLS_DIRS = {
     "agents-project": ".agents/skills",
@@ -49,8 +50,22 @@ def eprint(*parts: object) -> None:
     print(*parts, file=sys.stderr)
 
 
+def normalize_header_value(value: str) -> str:
+    return " ".join(value.strip().split())
+
+
+def capelry_user_agent(default: str = DEFAULT_HTTP_USER_AGENT) -> str:
+    override = normalize_header_value(os.environ.get("CAPELRY_USER_AGENT", ""))
+    if override:
+        return override
+    suffix = normalize_header_value(os.environ.get("CAPELRY_USER_AGENT_SUFFIX", ""))
+    if suffix:
+        return f"{default} {suffix}"
+    return default
+
+
 def fetch_bytes(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "capelry-bootstrap/2.0.8"})
+    request = urllib.request.Request(url, headers={"User-Agent": capelry_user_agent()})
     try:
         with urllib.request.urlopen(request) as response:
             return response.read()

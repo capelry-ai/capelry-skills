@@ -110,8 +110,10 @@ The bootstrap script reads these optional variables:
 | `CAPELRY_BOOTSTRAP_TARGET`     | unset                                | Known install target, e.g. `pi-project`      |
 | `CAPELRY_BOOTSTRAP_NAME`       | `capelry`                            | Destination directory name under skills dir  |
 | `CAPELRY_SKILLS_DIR`           | `.agents/skills`                     | Parent skills directory when no target is set |
+| `CAPELRY_USER_AGENT_SUFFIX`    | unset                                | Product/deployment token appended to the default User-Agent |
+| `CAPELRY_USER_AGENT`           | unset                                | Full User-Agent override when appending is not enough |
 
-The installed Capelry CLI reads `CAPELRY_REGISTRY_URL` when you want registry operations to use a private, staging, or self-hosted Capelry registry. By default, registry operations use `https://capelry.com`.
+The installed Capelry CLI reads `CAPELRY_REGISTRY_URL` when you want registry operations to use a private, staging, or self-hosted Capelry registry. By default, registry operations use `https://capelry.com`. Registry requests send `capelry-client` as their User-Agent so Capelry.com can attribute client usage; the bootstrap helper sends `capelry-client bootstrap`. Prefer `CAPELRY_USER_AGENT_SUFFIX` for attribution in logs, and avoid personal data.
 
 For Capelry self-update checks from GitHub, the installed CLI also reads `CAPELRY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN` when you need higher API rate limits or private-repository access.
 
@@ -165,21 +167,25 @@ Global targets are available when explicitly requested:
 
 For agents that do not have a native skill loader, add or paste `SKILL.md` as project instructions and tell the agent to use `scripts/capelry.py` for registry operations.
 
-## Local source checkout fallback
+## Local source checkout sync
 
-If you are developing from this repository and want to copy the source skill directly into a portable project location:
+If you are developing from this repository and want an installed skill to include unreleased local changes, use `sync-install` instead of manual copy commands. It validates the local skill, replaces the destination, and keeps a `.zip` archive backup by default. Do not create persistent backup directories inside agent skill roots because agent harnesses may load them as duplicate skills.
+
+Portable project-local install:
 
 ```text
-python3 -c "import shutil, pathlib; dst=pathlib.Path('.agents/skills/capelry'); shutil.rmtree(dst, ignore_errors=True); shutil.copytree(pathlib.Path('skills/capelry'), dst)"
+python3 skills/capelry/scripts/capelry.py sync-install --target agents-project --dry-run
+python3 skills/capelry/scripts/capelry.py sync-install --target agents-project --yes
 ```
 
-PowerShell with `py`:
+Pi global install for testing the active Pi skill:
 
-```powershell
-py -c "import shutil, pathlib; dst=pathlib.Path('.agents/skills/capelry'); shutil.rmtree(dst, ignore_errors=True); shutil.copytree(pathlib.Path('skills/capelry'), dst)"
+```text
+python3 skills/capelry/scripts/capelry.py sync-install --target pi-global --dry-run
+python3 skills/capelry/scripts/capelry.py sync-install --target pi-global --yes
 ```
 
-For Pi-only development in this repository, you can copy to `.pi/skills/capelry` instead and run `/reload` in Pi.
+Use `--dest /absolute/path/to/skills/capelry` for an exact destination. Reload/restart the agent afterward; in Pi, run `/reload` then `/skill:capelry`.
 
 ## Use after bootstrap
 
@@ -226,7 +232,7 @@ Capelry v2.0.6 and later use catalog-aware ARD discovery only. Human refs use `n
 
 ```text
 python3 <capelry-skill-dir>/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet pi-project
-python3 <capelry-skill-dir>/scripts/capelry.py info urn:ai:github.com:capelry-ai:capelry-skills:skills:capelry --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info urn:air:github.com:capelry-ai:capelry-skills:capelry --install-snippet pi-project
 ```
 
 Install a skill into the portable project location:
@@ -239,6 +245,13 @@ Install into Pi project skills instead:
 
 ```text
 python3 <capelry-skill-dir>/scripts/capelry.py install capelry-ai/capelry-skills/capelry --target pi-project
+```
+
+Install every supported skill from a catalog, with a dry run first:
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py install-catalog y30k/ai-capabilities --target pi-project --dry-run
+python3 <capelry-skill-dir>/scripts/capelry.py install-catalog y30k/ai-capabilities --target pi-project --force --yes
 ```
 
 PowerShell examples:

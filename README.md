@@ -43,6 +43,7 @@ This repository contains the **Capelry registry skill**: a portable Agent Skill 
 - [Release versioning](https://github.com/capelry-ai/capelry-skills#release-versioning)
 - [Testing and CI](https://github.com/capelry-ai/capelry-skills#testing-and-ci)
 - [Registry URL](https://github.com/capelry-ai/capelry-skills#registry-url)
+- [User agent](https://github.com/capelry-ai/capelry-skills#user-agent)
 - [Repository tour](https://github.com/capelry-ai/capelry-skills#repository-tour)
 - [Install targets](https://github.com/capelry-ai/capelry-skills#install-targets)
 - [No native skill loader?](https://github.com/capelry-ai/capelry-skills#no-native-skill-loader)
@@ -211,6 +212,13 @@ python3 .pi/skills/capelry/scripts/capelry.py info capelry-ai/capelry-skills/cap
 python3 .pi/skills/capelry/scripts/capelry.py install capelry-ai/capelry-skills/capelry --target pi-project
 ```
 
+Install every supported skill from a catalog, with a dry run first:
+
+```text
+python3 .pi/skills/capelry/scripts/capelry.py install-catalog y30k/ai-capabilities --target pi-project --dry-run
+python3 .pi/skills/capelry/scripts/capelry.py install-catalog y30k/ai-capabilities --target pi-project --force --yes
+```
+
 Check and update the installed Capelry skill itself:
 
 ```text
@@ -233,9 +241,18 @@ python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref vX.Y.Z --yes
 
 Self-update is opt-in and filesystem-writing: it prompts in interactive terminals and requires `--yes` for non-interactive runs. It is intended for installed skill copies; use `git` to update this source checkout unless you explicitly pass `--allow-source-checkout`. Existing pre-1.1.0 installs need one manual re-bootstrap/reinstall to get the `self-update` command. Reload or restart your agent afterward. If GitHub API rate limits are hit, set `CAPELRY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`.
 
+For maintainers testing unreleased local changes from this source checkout, sync the checked-out skill into an installed target with a built-in backup:
+
+```text
+python3 skills/capelry/scripts/capelry.py sync-install --target pi-global --dry-run
+python3 skills/capelry/scripts/capelry.py sync-install --target pi-global --yes
+```
+
+Use `--dest /path/to/skills/capelry` for an exact destination. `sync-install` keeps backups as `.zip` archives only; do not create persistent backup directories inside agent skill roots because agent harnesses may load them as duplicate skills. Reload or restart the agent after syncing.
+
 ## Release versioning
 
-Release GitHub tags and releases as stable `vX.X.X` refs, for example `v2.0.8`. Keep `skills/capelry/capability.yaml` at the matching registry package version without the `v` prefix, for example `2.0.8`.
+Release GitHub tags and releases as stable `vX.X.X` refs, for example `v2.0.9`. Keep `skills/capelry/capability.yaml` at the matching registry package version without the `v` prefix, for example `2.0.9`.
 
 Recommended release flow:
 
@@ -272,11 +289,22 @@ The bundled registry CLI defaults to Capelry.com. Override the registry only if 
 CAPELRY_REGISTRY_URL=https://your-registry.example.com
 ```
 
+## User agent
+
+The bundled client sends `User-Agent: capelry-client` by default so Capelry.com can attribute client usage. The bootstrap helper sends `capelry-client bootstrap`. To identify your integration in registry or GitHub logs, append a product token without replacing the Capelry client token:
+
+```bash
+CAPELRY_USER_AGENT_SUFFIX="my-agent/1.0" python3 .agents/skills/capelry/scripts/capelry.py search "skill creator"
+```
+
+Use `CAPELRY_USER_AGENT` only when you need a full override. Avoid personal data; use an app, agent, company, or deployment identifier.
+
 Useful links:
 
 - Website: [https://capelry.com](https://capelry.com)
 - API docs: [https://capelry.com/docs/api](https://capelry.com/docs/api)
 - OpenAPI JSON: [https://capelry.com/api/openapi](https://capelry.com/api/openapi)
+- Repository AI Catalog manifest: [https://github.com/capelry-ai/capelry-skills/blob/main/.well-known/ai-catalog.json](https://github.com/capelry-ai/capelry-skills/blob/main/.well-known/ai-catalog.json)
 - Skills repository: [https://github.com/capelry-ai/capelry-skills](https://github.com/capelry-ai/capelry-skills)
 - Bootstrap source repository: [https://github.com/capelry-ai/capelry-skills](https://github.com/capelry-ai/capelry-skills)
 - Bootstrap prompt: [https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/BOOTSTRAP.md](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/BOOTSTRAP.md)
@@ -287,10 +315,11 @@ Useful links:
 
 | Path | Purpose |
 | --- | --- |
+| [`.well-known/ai-catalog.json`](https://github.com/capelry-ai/capelry-skills/blob/main/.well-known/ai-catalog.json) | Repository-level ARD/AI Catalog manifest. |
 | [`capelry-mark.svg`](https://github.com/capelry-ai/capelry-skills/blob/main/capelry-mark.svg) | Friendly Capelry mark. |
 | [`skills/capelry/BOOTSTRAP.md`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/BOOTSTRAP.md) | Start here: the agent-facing bootstrap prompt. |
 | [`skills/capelry/SKILL.md`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/SKILL.md) | The actual skill instructions agents load. |
-| [`skills/capelry/capability.yaml`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/capability.yaml) | Legacy Capelry package manifest. |
+| [`skills/capelry/capability.yaml`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/capability.yaml) | Capelry package manifest kept in sync with ARD catalog metadata. |
 | [`skills/capelry/ai-catalog.json`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/ai-catalog.json) | ARD/AI Catalog self-entry for the Capelry skill. |
 | [`skills/capelry/agents/openai.yaml`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/agents/openai.yaml) | UI/display metadata. |
 | [`skills/capelry/scripts/bootstrap.py`](https://github.com/capelry-ai/capelry-skills/blob/main/skills/capelry/scripts/bootstrap.py) | OS-neutral GitHub-source bootstrap installer. |

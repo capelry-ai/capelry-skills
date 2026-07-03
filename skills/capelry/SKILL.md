@@ -13,6 +13,8 @@ Use this skill to work with the Capelry capability registry. Capelry stores vers
 
 Default registry URL: `https://capelry.com`. Set `CAPELRY_REGISTRY_URL` for private, staging, or self-hosted registries.
 
+Network requests send `User-Agent: capelry-client` by default so Capelry.com can attribute client usage. Set `CAPELRY_USER_AGENT_SUFFIX` to append an integration identifier (recommended) or `CAPELRY_USER_AGENT` to fully override it. Use product/deployment identifiers, not personal data.
+
 ## Python launcher
 
 Use `python3` in Linux, macOS, and Pi environments. If unavailable, use the local Python 3 launcher such as `py` on Windows.
@@ -35,6 +37,16 @@ python3 <capelry-skill-dir>/scripts/capelry.py self-update --ref vX.Y.Z --yes
 ```
 
 Self-update downloads GitHub source path `skills/capelry` from `capelry-ai/capelry-skills`. Reload/restart the agent afterward. Use `git` rather than self-update inside a `capelry-skills` source checkout unless the user explicitly asks for `--allow-source-checkout`.
+
+When maintaining Capelry from a source checkout and the user wants the installed agent skill to include unreleased local changes, use the local sync command instead of manual copy steps:
+
+```text
+python3 skills/capelry/scripts/capelry.py sync-install --target pi-global --dry-run
+python3 skills/capelry/scripts/capelry.py sync-install --target pi-global --yes
+python3 skills/capelry/scripts/capelry.py sync-install --dest /absolute/path/to/skills/capelry --yes
+```
+
+`sync-install` validates the local skill, replaces the destination, keeps a `.zip` archive backup by default, and then the agent must be reloaded. Do not create persistent backup directories inside agent skill roots because agent harnesses may load them as duplicate skills.
 
 ## Fast path: Search -> Info -> Compare -> Install
 
@@ -78,7 +90,7 @@ When a user says “find me skills for X”, produce a shortlist instead of dump
 
 1. Generate 3-6 related queries from the user's phrase. Remove generic words like “skill” or “capability”.
 2. Search with narrow supported ARD filters: usually `--type skill`, `--trust-state source-hosted`, `--catalog namespace/catalog`, `--source owner/repo`, or `--filter FIELD=VALUE`.
-3. Inspect shortlisted entries with `info`; it resolves both `urn:ai:...` identifiers and `namespace/catalog/resource` slug refs through `GET /agents`.
+3. Inspect shortlisted entries with `info`; it resolves spec `urn:air:...` identifiers and `namespace/catalog/resource` slug refs through `GET /agents`.
 4. Compare media type, ARD identifier, slug, catalog path, source repository, trust state, Trust Manifest/provenance, install data, and checksum when present.
 5. Return a concise shortlist. Install only after confirmation unless the user requested a specific known capability.
 
@@ -99,7 +111,7 @@ python3 .pi/skills/capelry/scripts/capelry.py info <namespace/catalog/resource> 
 Shortlist output format:
 
 ```text
-1. urn:ai:publisher.example:capability@version
+1. urn:air:publisher.example:capability@version
    name: Display Name
    type: application/vnd.capelry.skill-source+json
    summary: ...
@@ -170,7 +182,7 @@ POST {CAPELRY_REGISTRY_URL}/search
 
 ```text
 python3 <capelry-skill-dir>/scripts/capelry.py info namespace/catalog/resource --install-snippet pi-project
-python3 <capelry-skill-dir>/scripts/capelry.py info urn:ai:github.com:org:repo:skill --json
+python3 <capelry-skill-dir>/scripts/capelry.py info urn:air:github.com:org:repo:skill --json
 ```
 
 Default ARD resolution uses `GET {CAPELRY_REGISTRY_URL}/agents?filter=identifier = '...'` for URNs and `metadata.com.capelry.slug = 'namespace/catalog/resource'` for slug refs.
@@ -189,9 +201,18 @@ Inspect at least one candidate, usually two or three, before installing third-pa
 
 ## Install
 
+Install one resource:
+
 ```text
 python3 <capelry-skill-dir>/scripts/capelry.py install namespace/catalog/resource --target pi-project
-python3 <capelry-skill-dir>/scripts/capelry.py install urn:ai:github.com:org:repo:skill --target pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py install urn:air:github.com:org:repo:skill --target pi-project
+```
+
+Install all supported skill resources from a catalog, with a dry run first:
+
+```text
+python3 <capelry-skill-dir>/scripts/capelry.py install-catalog y30k/ai-capabilities --target pi-project --dry-run
+python3 <capelry-skill-dir>/scripts/capelry.py install-catalog y30k/ai-capabilities --target pi-project --force --yes
 ```
 
 Use `--target agents-project`, `--target claude-project`, or another target if Pi is not active.
@@ -239,11 +260,11 @@ Use `SKILL.md` as `spec.docs.readme` when you do not need a human README. Add `B
 Create a zip from inside the skill directory:
 
 ```text
-python3 -m zipfile -c capelry-2.0.8.zip capability.yaml SKILL.md BOOTSTRAP.md ai-catalog.json agents scripts
+python3 -m zipfile -c capelry-2.0.9.zip capability.yaml SKILL.md BOOTSTRAP.md ai-catalog.json agents scripts
 # Add references/ or assets/ only if those directories exist.
 ```
 
-Collection member refs and ARD slugs should use `namespace/catalog/resource`, not old `namespace/name` refs.
+Collection member refs and ARD slugs should use `namespace/catalog/resource`, not old `namespace/name` refs. When this repository is served as a catalog source, keep the repository-level `.well-known/ai-catalog.json` aligned with the packaged `skills/capelry/ai-catalog.json` self-entry.
 
 ## Safety rules
 

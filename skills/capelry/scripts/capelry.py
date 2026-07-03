@@ -21,7 +21,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-CAPELRY_SKILL_VERSION = "2.0.8"
+CAPELRY_SKILL_VERSION = "2.0.9"
 DEFAULT_REGISTRY = "https://capelry.com"
 SELF_GITHUB_REPOSITORY = "capelry-ai/capelry-skills"
 SELF_SOURCE_PATH = "skills/capelry"
@@ -51,7 +51,8 @@ ARD_CATALOG_SLUG_METADATA = "com.capelry.catalogSlug"
 ARD_CATALOG_URL_METADATA = "com.capelry.catalogUrl"
 ARD_SOURCE_REPOSITORY_METADATA = "com.capelry.sourceRepository"
 ARD_SOURCE_REPOSITORY_FULL_NAME_METADATA = "com.capelry.sourceRepositoryFullName"
-HTTP_USER_AGENT = f"capelry-skill/{CAPELRY_SKILL_VERSION}"
+DEFAULT_HTTP_USER_AGENT = "capelry-client"
+HTTP_USER_AGENT = DEFAULT_HTTP_USER_AGENT
 
 TARGET_ROOTS = {
     "agents-project": ".agents/skills",
@@ -151,8 +152,22 @@ def api_url(base: str, path: str) -> str:
     return f"{base}{path if path.startswith('/') else '/' + path}"
 
 
-def http_headers(url: str, *, user_agent: str = HTTP_USER_AGENT) -> dict[str, str]:
-    headers = {"User-Agent": user_agent}
+def normalize_header_value(value: str) -> str:
+    return " ".join(value.strip().split())
+
+
+def capelry_user_agent(default: str = DEFAULT_HTTP_USER_AGENT) -> str:
+    override = normalize_header_value(os.environ.get("CAPELRY_USER_AGENT", ""))
+    if override:
+        return override
+    suffix = normalize_header_value(os.environ.get("CAPELRY_USER_AGENT_SUFFIX", ""))
+    if suffix:
+        return f"{default} {suffix}"
+    return default
+
+
+def http_headers(url: str, *, user_agent: str = DEFAULT_HTTP_USER_AGENT) -> dict[str, str]:
+    headers = {"User-Agent": capelry_user_agent(user_agent)}
     parsed = urllib.parse.urlparse(url)
     if parsed.netloc.lower() == "api.github.com":
         token = (
@@ -183,7 +198,7 @@ def fetch_json(url: str) -> Any:
 
 
 def github_headers(accept: str | None = "application/vnd.github+json") -> dict[str, str]:
-    headers = {"User-Agent": "capelry-skill/self-update"}
+    headers = {"User-Agent": capelry_user_agent(f"{DEFAULT_HTTP_USER_AGENT} self-update")}
     if accept:
         headers["Accept"] = accept
     token = (
@@ -229,7 +244,7 @@ def post_json(url: str, payload: dict[str, Any]) -> Any:
         url,
         data=body,
         headers={
-            "User-Agent": HTTP_USER_AGENT,
+            **http_headers(url),
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
@@ -288,7 +303,7 @@ def post_ard_json(url: str, payload: dict[str, Any]) -> Any:
         url,
         data=body,
         headers={
-            "User-Agent": HTTP_USER_AGENT,
+            **http_headers(url),
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
@@ -688,8 +703,12 @@ def print_ard_entries(entries: list[dict[str, Any]]) -> None:
             print(f"  {description}")
 
 
+def is_ard_identifier(value: str) -> bool:
+    return value.startswith(("urn:air:", "urn:ai:"))
+
+
 def ard_resolution_field(value: str) -> str:
-    return "identifier" if value.startswith("urn:ai:") else ARD_SLUG_FILTER
+    return "identifier" if is_ard_identifier(value) else ARD_SLUG_FILTER
 
 
 def ard_detail_summary(entry: dict[str, Any], install_target: str | None = None, base: str | None = None) -> dict[str, Any]:
@@ -1568,6 +1587,16 @@ def unsupported_ard_install_message(entry: dict[str, Any]) -> str:
     return f"Unsupported ARD media type for automatic install: {ard_entry_media_type(entry)}.{guidance}"
 
 
+def install_ard_entry(entry: dict[str, Any], dest: Path, force: bool) -> tuple[str, str | None]:
+    media_type = ard_entry_media_type(entry)
+    if media_type == "application/vnd.capelry.skill+zip":
+        installed_from, checksum = install_ard_zip_entry(entry, dest, force)
+        return installed_from, checksum
+    if media_type == "application/vnd.capelry.skill-source+json":
+        return install_ard_source_entry(entry, dest, force), None
+    raise SystemExit(unsupported_ard_install_message(entry))
+
+
 def command_install(args: argparse.Namespace) -> None:
     base = registry_base(args)
     entry = resolve_ard_entry_for_install(base, args.ref)
@@ -1576,13 +1605,7 @@ def command_install(args: argparse.Namespace) -> None:
     if not args.json_output:
         print_ard_trust_summary(entry)
 
-    checksum: str | None = None
-    if media_type == "application/vnd.capelry.skill+zip":
-        installed_from, checksum = install_ard_zip_entry(entry, dest, args.force)
-    elif media_type == "application/vnd.capelry.skill-source+json":
-        installed_from = install_ard_source_entry(entry, dest, args.force)
-    else:
-        raise SystemExit(unsupported_ard_install_message(entry))
+    installed_from, checksum = install_ard_entry(entry, dest, args.force)
 
     skill_name = installed_skill_name(dest)
     result = {
@@ -1607,6 +1630,102 @@ def command_install(args: argparse.Namespace) -> None:
     print(f"Installed {entry.get('identifier', args.ref)} to {dest}")
     print(f"source: {installed_from}")
     print("Next: reload or restart your agent. In Pi, run /reload and then /skill:" + skill_name)
+
+
+def confirm_bulk_install(args: argparse.Namespace, count: int, target: str) -> None:
+    if args.yes or args.dry_run:
+        return
+    if not sys.stdin.isatty():
+        raise SystemExit("Refusing non-interactive catalog install without --yes")
+    answer = input(f"Install {count} ARD entries into {target}? [y/N] ").strip().lower()
+    if answer not in {"y", "yes"}:
+        raise SystemExit("Catalog install cancelled")
+
+
+def catalog_install_entries(base: str, catalog: str, limit: int) -> list[dict[str, Any]]:
+    entries = ard_agents_entries(base, field=ARD_CATALOG_PATH_FILTER, value=catalog, page_size=limit)
+    return [entry for entry in entries if ard_entry_media_type(entry) in ARD_SKILL_MEDIA_TYPES]
+
+
+def command_install_catalog(args: argparse.Namespace) -> None:
+    base = registry_base(args)
+    limit = clamp_api_search_limit(args.limit) or API_SEARCH_LIMIT_MAX
+    entries = catalog_install_entries(base, args.catalog, limit)
+    planned: list[dict[str, Any]] = []
+    for entry in entries:
+        ref = ard_slug(entry) or str(entry.get("identifier") or "")
+        dest = resolve_install_dest(args, ard_entry_install_name(entry, ref))
+        planned.append(
+            {
+                "ref": ref,
+                "identifier": entry.get("identifier"),
+                "slug": ard_slug(entry),
+                "mediaType": ard_entry_media_type(entry),
+                "trustState": ard_trust_state(entry),
+                "destination": str(dest),
+                "skillName": dest.name,
+                "wouldReplace": dest.exists(),
+            }
+        )
+
+    confirm_bulk_install(args, len(planned), args.target)
+    if args.dry_run:
+        payload = {
+            "registry": base,
+            "api": "ard",
+            "catalog": args.catalog,
+            "target": args.target,
+            "count": len(planned),
+            "limit": limit,
+            "dryRun": True,
+            "entries": planned,
+        }
+        if args.json_output:
+            print_json(payload)
+        else:
+            print(f"Would install {len(planned)} supported skill entries from {args.catalog} to {args.target}.")
+            for item in planned:
+                marker = "replace" if item["wouldReplace"] else "install"
+                print(f"- {marker}: {item['slug'] or item['identifier']} -> {item['destination']}")
+        return
+
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for item, entry in zip(planned, entries):
+        dest = Path(str(item["destination"]))
+        try:
+            installed_from, checksum = install_ard_entry(entry, dest, args.force)
+            result = {**item, "installed": True, "installedFrom": installed_from}
+            if checksum:
+                result["checksumSha256"] = checksum
+            results.append(result)
+        except SystemExit as error:
+            errors.append({**item, "installed": False, "message": str(error)})
+            if not args.keep_going:
+                break
+
+    payload = {
+        "registry": base,
+        "api": "ard",
+        "catalog": args.catalog,
+        "target": args.target,
+        "count": len(results),
+        "errorCount": len(errors),
+        "limit": limit,
+        "installed": results,
+        "errors": errors,
+    }
+    if args.json_output:
+        print_json(payload)
+        return
+    print(f"Installed {len(results)} supported skill entries from {args.catalog} to {args.target}.")
+    for result in results:
+        print(f"- {result['skillName']}: {result['slug'] or result['identifier']}")
+    for error in errors:
+        print(f"error: {error['slug'] or error['identifier']}: {error['message']}")
+    if errors:
+        raise SystemExit(1)
+    print("Next: reload or restart your agent so it notices the installed skills.")
 
 
 def strip_yaml_scalar(value: str) -> str:
@@ -1820,6 +1939,18 @@ def confirm_self_update(args: argparse.Namespace, info: dict[str, Any]) -> None:
         raise SystemExit("Self-update cancelled")
 
 
+def confirm_sync_install(args: argparse.Namespace, info: dict[str, Any]) -> None:
+    if args.yes or args.dry_run:
+        return
+    if not sys.stdin.isatty():
+        raise SystemExit("Refusing non-interactive local sync without --yes")
+    answer = input(
+        f"Replace {info['destDir']} with local Capelry skill from {info['sourceDir']}? [y/N] "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        raise SystemExit("Local sync cancelled")
+
+
 def validate_downloaded_self_skill(dest: Path) -> None:
     required = ["SKILL.md", "capability.yaml", "scripts/capelry.py", "scripts/bootstrap.py"]
     missing = [item for item in required if not (dest / item).exists()]
@@ -1834,33 +1965,90 @@ def remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def backup_path_for(dest: Path) -> Path:
+def backup_archive_path_for(dest: Path) -> Path:
     stamp = int(time.time())
-    candidate = dest.parent / f".{dest.name}.backup-{stamp}"
+    candidate = dest.parent / f".{dest.name}.backup-{stamp}.zip"
     index = 1
     while candidate.exists():
-        candidate = dest.parent / f".{dest.name}.backup-{stamp}-{index}"
+        candidate = dest.parent / f".{dest.name}.backup-{stamp}-{index}.zip"
         index += 1
     return candidate
 
 
+def create_path_archive(source: Path, archive: Path) -> None:
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if source.is_dir():
+            for path in source.rglob("*"):
+                if path.is_dir():
+                    continue
+                zf.write(path, Path(source.name) / path.relative_to(source))
+        else:
+            zf.write(source, source.name)
+
+
 def replace_skill_dir(dest: Path, new_dir: Path, *, keep_backup: bool) -> Path | None:
     backup: Path | None = None
+    temp_old_parent: Path | None = None
+    temp_old: Path | None = None
     if dest.exists():
-        backup = backup_path_for(dest)
-        dest.rename(backup)
+        if keep_backup:
+            backup = backup_archive_path_for(dest)
+            create_path_archive(dest, backup)
+        temp_old_parent = Path(tempfile.mkdtemp(prefix="capelry-replace-old-"))
+        temp_old = temp_old_parent / dest.name
+        shutil.move(str(dest), str(temp_old))
     try:
         shutil.move(str(new_dir), str(dest))
     except Exception:
         if dest.exists():
             remove_path(dest)
+        if temp_old and temp_old.exists():
+            shutil.move(str(temp_old), str(dest))
         if backup and backup.exists():
-            backup.rename(dest)
+            backup.unlink()
         raise
-    if backup and backup.exists() and not keep_backup:
-        shutil.rmtree(backup)
-        return None
+    finally:
+        if temp_old_parent and temp_old_parent.exists():
+            shutil.rmtree(temp_old_parent, ignore_errors=True)
     return backup
+
+
+def resolve_sync_install_dest(args: argparse.Namespace) -> Path:
+    if args.dest:
+        return Path(args.dest).expanduser()
+    return Path(TARGET_ROOTS[args.target]).expanduser() / args.name
+
+
+def sync_ignore(_directory: str, names: list[str]) -> set[str]:
+    ignored = {"__pycache__", ".DS_Store"}
+    ignored.update(name for name in names if name.endswith((".pyc", ".pyo")))
+    return ignored.intersection(names)
+
+
+def sync_install_info(args: argparse.Namespace) -> dict[str, Any]:
+    source_dir = Path(args.source).expanduser().resolve() if args.source else self_skill_dir()
+    dest_dir = resolve_sync_install_dest(args).resolve()
+    if source_dir == dest_dir:
+        raise SystemExit("Local sync source and destination are the same directory")
+    validate_downloaded_self_skill(source_dir)
+    dest_version = self_local_version(dest_dir) if dest_dir.exists() else None
+    return {
+        "sourceDir": str(source_dir),
+        "destDir": str(dest_dir),
+        "target": None if args.dest else args.target,
+        "sourceVersion": self_local_version(source_dir),
+        "destVersion": dest_version,
+        "backupPolicy": "archive" if not args.no_backup else "none",
+    }
+
+
+def copy_local_skill_source(source_dir: Path, dest_dir: Path, *, keep_backup: bool) -> Path | None:
+    with tempfile.TemporaryDirectory(prefix="capelry-local-sync-") as temp_root:
+        candidate = Path(temp_root) / "capelry"
+        shutil.copytree(source_dir, candidate, ignore=sync_ignore)
+        validate_downloaded_self_skill(candidate)
+        return replace_skill_dir(dest_dir, candidate, keep_backup=keep_backup)
 
 
 def source_checkout_root(skill_dir: Path) -> Path | None:
@@ -1922,6 +2110,35 @@ def command_self_update(args: argparse.Namespace) -> None:
         return
 
     print(f"Updated Capelry skill to {info['remoteVersion']} from {info['remoteRef']}.")
+    if backup:
+        print(f"backup: {backup}")
+    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:capelry")
+
+
+def command_sync_install(args: argparse.Namespace) -> None:
+    info = sync_install_info(args)
+    confirm_sync_install(args, info)
+    if args.dry_run:
+        if args.json_output:
+            print_json({**info, "updated": False, "dryRun": True})
+        else:
+            print(f"Local Capelry source: {info['sourceDir']} ({info['sourceVersion']})")
+            print(f"Destination: {info['destDir']} ({info['destVersion'] or 'not installed'})")
+            print(f"Backup policy: {info['backupPolicy']}")
+            print("Dry run only; no files changed.")
+        return
+
+    backup = copy_local_skill_source(
+        Path(info["sourceDir"]),
+        Path(info["destDir"]),
+        keep_backup=not args.no_backup,
+    )
+    result = {**info, "updated": True, "backup": str(backup) if backup else None}
+    if args.json_output:
+        print_json(result)
+        return
+
+    print(f"Synced local Capelry skill from {info['sourceDir']} to {info['destDir']}.")
     if backup:
         print(f"backup: {backup}")
     print("Next: reload or restart your agent. In Pi, run /reload and then /skill:capelry")
@@ -2023,7 +2240,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover.set_defaults(func=command_discover)
 
     info = subparsers.add_parser("info", help="Show ARD entry details")
-    info.add_argument("ref", help="ARD slug namespace/catalog/resource or urn:ai:...")
+    info.add_argument("ref", help="ARD slug namespace/catalog/resource or urn:air:...")
     add_install_snippet_argument(info)
     add_json_argument(info)
     info.set_defaults(func=command_info)
@@ -2039,13 +2256,24 @@ def build_parser() -> argparse.ArgumentParser:
     bulk_info.set_defaults(func=command_bulk_info)
 
     install = subparsers.add_parser("install", help="Install a supported skill from an ARD entry")
-    install.add_argument("ref", help="ARD slug namespace/catalog/resource or urn:ai:...")
+    install.add_argument("ref", help="ARD slug namespace/catalog/resource or urn:air:...")
     install.add_argument("--target", choices=sorted(TARGET_ROOTS), default="agents-project")
     install.add_argument("--dest", help="Exact destination directory")
     install.add_argument("--name", help="Install directory name override")
     install.add_argument("--force", action="store_true", help="Replace an existing destination")
     add_json_argument(install)
     install.set_defaults(func=command_install)
+
+    install_catalog = subparsers.add_parser("install-catalog", help="Install all supported skills from an ARD catalog path")
+    install_catalog.add_argument("catalog", help="Catalog path namespace/catalog, e.g. y30k/ai-capabilities")
+    install_catalog.add_argument("--target", choices=sorted(TARGET_ROOTS), default="agents-project")
+    install_catalog.add_argument("--force", action="store_true", help="Replace existing skill directories")
+    install_catalog.add_argument("--yes", "-y", action="store_true", help="Skip confirmation for non-interactive catalog installs")
+    install_catalog.add_argument("--dry-run", action="store_true", help="Show what would be installed without writing files")
+    install_catalog.add_argument("--limit", type=int, default=API_SEARCH_LIMIT_MAX, help="Maximum catalog entries to inspect (max 100)")
+    install_catalog.add_argument("--keep-going", action="store_true", help="Continue installing after an individual entry fails")
+    add_json_argument(install_catalog)
+    install_catalog.set_defaults(func=command_install_catalog, dest=None, name=None)
 
     version = subparsers.add_parser(
         "version",
@@ -2066,7 +2294,7 @@ def build_parser() -> argparse.ArgumentParser:
     self_update.add_argument("--yes", "-y", action="store_true", help="Skip confirmation for non-interactive updates")
     self_update.add_argument("--dry-run", action="store_true", help="Show what would change without writing files")
     self_update.add_argument("--force", action="store_true", help="Reinstall even when the remote ref is not newer")
-    self_update.add_argument("--keep-backup", action="store_true", help="Keep the previous skill directory as a backup")
+    self_update.add_argument("--keep-backup", action="store_true", help="Keep the previous skill directory as a .zip archive backup")
     self_update.add_argument(
         "--allow-source-checkout",
         action="store_true",
@@ -2074,6 +2302,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_json_argument(self_update)
     self_update.set_defaults(func=command_self_update)
+
+    sync_install = subparsers.add_parser(
+        "sync-install",
+        aliases=["install-local", "dev-install"],
+        help="Copy this local Capelry skill source to a project/global skill directory",
+    )
+    sync_install.add_argument(
+        "--source",
+        help="Local Capelry skill source directory (default: the directory containing this script)",
+    )
+    sync_install.add_argument(
+        "--target",
+        choices=sorted(TARGET_ROOTS),
+        default="agents-project",
+        help="Known install target when --dest is omitted",
+    )
+    sync_install.add_argument("--name", default="capelry", help="Install directory name under the target skills dir")
+    sync_install.add_argument("--dest", help="Exact destination directory; overrides --target/name")
+    sync_install.add_argument("--yes", "-y", action="store_true", help="Skip confirmation for non-interactive local sync")
+    sync_install.add_argument("--dry-run", action="store_true", help="Show what would change without writing files")
+    sync_install.add_argument("--no-backup", action="store_true", help="Do not keep a .zip archive backup of the previous destination")
+    add_json_argument(sync_install)
+    sync_install.set_defaults(func=command_sync_install)
 
     return parser
 
