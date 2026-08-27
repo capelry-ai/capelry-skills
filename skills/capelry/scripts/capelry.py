@@ -1593,7 +1593,10 @@ def parse_yaml_scalar(value: str) -> str:
     if not quoted and " #" in value:
         value = value.split(" #", 1)[0].rstrip()
     if len(value) >= 2 and value[0] == value[-1] == "'":
-        return value[1:-1].replace("''", "'")
+        inner = value[1:-1]
+        if "'" in inner.replace("''", ""):
+            raise ValueError("contains an unescaped apostrophe in a single-quoted YAML scalar; escape it as ''")
+        return inner.replace("''", "'")
     if len(value) >= 2 and value[0] == value[-1] == '"':
         try:
             parsed = json.loads(value)
@@ -1673,7 +1676,13 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
         raw_fields[key] = (match.group("value") or "", [])
         current_key = key
 
-    fields = {key: frontmatter_value(raw, continuation) for key, (raw, continuation) in raw_fields.items()}
+    fields: dict[str, Any] = {}
+    for key, (raw, continuation) in raw_fields.items():
+        try:
+            fields[key] = frontmatter_value(raw, continuation)
+        except ValueError as error:
+            fields[key] = ""
+            errors.append(f"frontmatter field '{key}' {error}")
     unknown = sorted(set(fields) - AGENT_SKILL_FRONTMATTER_FIELDS)
     if unknown:
         warnings.append(

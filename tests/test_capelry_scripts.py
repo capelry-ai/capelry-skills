@@ -114,6 +114,17 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
         )
 
     @classmethod
+    def malformed_single_quote_skill_zip(cls) -> bytes:
+        return cls.zip_bytes(
+            {
+                "SKILL.md": (
+                    "---\nname: malformed-single-quote\ndescription: 'it's useful'\n"
+                    "---\n\n# Malformed single quote\n"
+                )
+            }
+        )
+
+    @classmethod
     def mismatched_skill_zip(cls) -> bytes:
         return cls.zip_bytes({"SKILL.md": cls.skill_md("redirected-skill")})
 
@@ -184,12 +195,20 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     },
                 }
             )
-        elif kind in {"unsafe", "backslash-unsafe", "invalid", "malformed-yaml", "mismatched"}:
+        elif kind in {
+            "unsafe",
+            "backslash-unsafe",
+            "invalid",
+            "malformed-yaml",
+            "malformed-single-quote",
+            "mismatched",
+        }:
             archive_name = {
                 "unsafe": "unsafe.zip",
                 "backslash-unsafe": "backslash-unsafe.zip",
                 "invalid": "invalid.zip",
                 "malformed-yaml": "malformed-yaml.zip",
+                "malformed-single-quote": "malformed-single-quote.zip",
                 "mismatched": "mismatched.zip",
             }[kind]
             archive_bytes = {
@@ -197,6 +216,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 "backslash-unsafe": self.backslash_unsafe_skill_zip(),
                 "invalid": self.invalid_skill_zip(),
                 "malformed-yaml": self.malformed_yaml_skill_zip(),
+                "malformed-single-quote": self.malformed_single_quote_skill_zip(),
                 "mismatched": self.mismatched_skill_zip(),
             }[kind]
             slug = {
@@ -204,6 +224,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 "backslash-unsafe": "backslash-unsafe",
                 "invalid": "invalid-skill",
                 "malformed-yaml": "malformed-yaml",
+                "malformed-single-quote": "malformed-single-quote",
                 "mismatched": "planned-skill",
             }[kind]
             entry.update(
@@ -280,6 +301,9 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
         if self.path == "/archives/malformed-yaml.zip":
             self.send_bytes(self.malformed_yaml_skill_zip(), "application/zip")
             return
+        if self.path == "/archives/malformed-single-quote.zip":
+            self.send_bytes(self.malformed_single_quote_skill_zip(), "application/zip")
+            return
         if self.path == "/archives/mismatched.zip":
             self.send_bytes(self.mismatched_skill_zip(), "application/zip")
             return
@@ -304,6 +328,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 kind = "invalid"
             elif "malformed-yaml" in filter_value:
                 kind = "malformed-yaml"
+            elif "malformed-single-quote" in filter_value:
+                kind = "malformed-single-quote"
             elif "planned-skill" in filter_value:
                 kind = "mismatched"
             elif "source-skill" in filter_value:
@@ -907,6 +933,35 @@ class CapelryScriptTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "cannot continue a non-block scalar"):
                 bootstrap.validate_skill_directory(skill_dir, "continuation-skill")
 
+    def test_skill_validators_require_escaped_yaml_single_quotes(self) -> None:
+        capelry = load_module("capelry_single_quote_validation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_single_quote_validation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "single-quote-skill"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text(
+                "---\nname: single-quote-skill\ndescription: 'It''s useful for validation'\n"
+                "---\n\n# Instructions\n",
+                encoding="utf-8",
+            )
+            report = capelry.validate_skill_directory(skill_dir)
+            bootstrap_report = bootstrap.validate_skill_directory(skill_dir, "single-quote-skill")
+            self.assertTrue(report["valid"])
+            self.assertEqual(report["descriptionLength"], len("It's useful for validation"))
+            self.assertEqual(bootstrap_report["descriptionLength"], len("It's useful for validation"))
+
+            skill_file.write_text(
+                "---\nname: single-quote-skill\ndescription: 'It's useful for validation'\n"
+                "---\n\n# Instructions\n",
+                encoding="utf-8",
+            )
+            report = capelry.validate_skill_directory(skill_dir)
+            self.assertFalse(report["valid"])
+            self.assertIn("unescaped apostrophe", " ".join(report["errors"]))
+            with self.assertRaisesRegex(SystemExit, "unescaped apostrophe"):
+                bootstrap.validate_skill_directory(skill_dir, "single-quote-skill")
+
     def test_skill_validators_preserve_hashes_inside_quoted_descriptions(self) -> None:
         capelry = load_module("capelry_quoted_hash_validation", CAPELRY_SCRIPT)
         bootstrap = load_module("bootstrap_quoted_hash_validation", BOOTSTRAP_SCRIPT)
@@ -1141,6 +1196,41 @@ class CapelryScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("cannot continue non-block scalar", result.stderr)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "original")
+            self.assertIn("Existing valid skill", (dest / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_malformed_single_quote_cannot_replace_existing_install(self) -> None:
+        with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "malformed-single-quote"
+            dest.mkdir()
+            (dest / "SKILL.md").write_text(
+                RegistryFixtureHandler.skill_md(
+                    "malformed-single-quote",
+                    "Existing valid skill. Use for single-quote rollback testing.",
+                ),
+                encoding="utf-8",
+            )
+            marker = dest / "preserve-me.txt"
+            marker.write_text("original", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "install",
+                    "capelry-ai/capelry-skills/malformed-single-quote",
+                    "--dest",
+                    str(dest),
+                    "--force",
+                ],
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unescaped apostrophe", result.stderr)
             self.assertEqual(marker.read_text(encoding="utf-8"), "original")
             self.assertIn("Existing valid skill", (dest / "SKILL.md").read_text(encoding="utf-8"))
 

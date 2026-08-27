@@ -226,8 +226,10 @@ def yaml_scalar(value: str) -> str:
     quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
     if not quoted and " #" in value:
         value = value.split(" #", 1)[0].rstrip()
+        quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
     if quoted:
-        value = value[1:-1]
+        inner = value[1:-1]
+        return inner.replace("''", "'").strip() if value.startswith("'") else inner.strip()
     return value.strip()
 
 
@@ -251,6 +253,11 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
                     "use | or > for multiline values"
                 )
             quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+            if quoted and value.startswith("'") and "'" in value[1:-1].replace("''", ""):
+                raise SystemExit(
+                    f"Installed SKILL.md field '{key}' contains an unescaped apostrophe in a "
+                    "single-quoted YAML scalar; escape it as ''"
+                )
             if (value.startswith(("'", '"')) or value.endswith(("'", '"'))) and not quoted:
                 raise SystemExit(f"Installed SKILL.md field '{key}' must be a valid YAML string")
             if not quoted and (
