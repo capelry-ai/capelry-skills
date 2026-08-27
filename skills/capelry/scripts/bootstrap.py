@@ -295,6 +295,8 @@ def validate_frontmatter_structure(lines: list[str]) -> None:
             if current_key is None:
                 raise SystemExit(f"Installed SKILL.md frontmatter line {line_number} is indented without a field")
             if current_key != "metadata" and not is_yaml_block_scalar(current_value):
+                if not current_value:
+                    raise SystemExit(f"Installed SKILL.md field '{current_key}' must be a string, not a sequence or mapping")
                 raise SystemExit(
                     f"Installed SKILL.md field '{current_key}' cannot continue a non-block scalar; "
                     "use | or > for multiline values"
