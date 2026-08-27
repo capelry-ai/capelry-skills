@@ -235,6 +235,8 @@ YAML_NON_STRING_PLAIN_PATTERN = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?)$",
     re.IGNORECASE,
 )
+YAML_BLOCK_SCALAR_PATTERN = re.compile(r"^[>|](?:(?:[1-9][+-]?)|(?:[+-][1-9]?))?$")
+YAML_FORBIDDEN_PLAIN_PREFIXES = ("@", "`", "!", "&", "*", "#", "%", ",", "[", "]", "{", "}", "|", ">")
 AGENT_SKILL_FRONTMATTER_FIELDS = {
     "name",
     "description",
@@ -1587,6 +1589,21 @@ def resolve_install_dest(args: argparse.Namespace, capability_name: str) -> Path
     return Path(root).expanduser() / (args.name or capability_name)
 
 
+def is_yaml_block_scalar(value: str) -> bool:
+    return bool(YAML_BLOCK_SCALAR_PATTERN.fullmatch(value.strip()))
+
+
+def yaml_block_scalar_indent(value: str) -> int | None:
+    match = re.search(r"[1-9]", value)
+    return int(match.group()) if match else None
+
+
+def yaml_plain_scalar_has_forbidden_prefix(value: str) -> bool:
+    if value.startswith(YAML_FORBIDDEN_PLAIN_PREFIXES):
+        return True
+    return bool(re.match(r"^[-?:](?:\s|$)", value))
+
+
 def parse_yaml_scalar(value: str) -> str:
     value = value.strip()
     quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
@@ -1610,7 +1627,7 @@ def parse_yaml_scalar(value: str) -> str:
 def frontmatter_value(raw: str, continuation: list[str]) -> str:
     marker = raw.strip()
     content = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
-    if re.fullmatch(r"[>|][+-]?", marker):
+    if is_yaml_block_scalar(marker):
         return ("\n" if marker.startswith("|") else " ").join(content).strip()
     value = parse_yaml_scalar(marker)
     if content:
@@ -1619,8 +1636,8 @@ def frontmatter_value(raw: str, continuation: list[str]) -> str:
     return value
 
 
-def block_scalar_indentation_error(continuation: list[str]) -> str | None:
-    required_indent: int | None = None
+def block_scalar_indentation_error(marker: str, continuation: list[str]) -> str | None:
+    required_indent = yaml_block_scalar_indent(marker)
     for line in continuation:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
@@ -1671,7 +1688,7 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
                 errors.append(f"frontmatter line {line_number} is indented without a parent field")
             else:
                 raw_value, continuation = raw_fields[current_key]
-                if raw_value.strip() and not re.fullmatch(r"[>|][+-]?", raw_value.strip()):
+                if raw_value.strip() and not is_yaml_block_scalar(raw_value):
                     errors.append(
                         f"frontmatter line {line_number} cannot continue non-block scalar field '{current_key}'; "
                         "use | or > for multiline values"
@@ -1694,8 +1711,8 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
 
     fields: dict[str, Any] = {}
     for key, (raw, continuation) in raw_fields.items():
-        if re.fullmatch(r"[>|][+-]?", raw.strip()):
-            indentation_error = block_scalar_indentation_error(continuation)
+        if is_yaml_block_scalar(raw):
+            indentation_error = block_scalar_indentation_error(raw, continuation)
             if indentation_error:
                 errors.append(f"block scalar field '{key}' {indentation_error}")
         try:
@@ -1729,7 +1746,7 @@ def validate_scalar_shape(
         return
     raw, continuation = raw_fields[key]
     value = raw.strip()
-    if value and not re.fullmatch(r"[>|][+-]?", value):
+    if value and not is_yaml_block_scalar(value):
         quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
         mismatched_quote = value.startswith(("'", '"')) or value.endswith(("'", '"'))
         invalid_double_quote = False
@@ -1739,7 +1756,7 @@ def validate_scalar_shape(
             except json.JSONDecodeError:
                 invalid_double_quote = True
         invalid_plain = not quoted and (
-            value.startswith(("[", "{"))
+            yaml_plain_scalar_has_forbidden_prefix(value)
             or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
             or bool(YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value))
             or bool(re.search(r":\s", value))
@@ -1750,6 +1767,67 @@ def validate_scalar_shape(
         meaningful = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
         if any(line.startswith("- ") or re.match(r"^[^:#]+:\s", line) for line in meaningful):
             errors.append(f"frontmatter field '{key}' must be a string, not a sequence or mapping")
+
+
+def validate_metadata_mapping(
+    raw_metadata: tuple[str, list[str]] | None,
+    errors: list[str],
+) -> None:
+    if raw_metadata is None:
+        return
+    raw, lines = raw_metadata
+    if raw.strip():
+        errors.append("metadata must use an indented YAML mapping from string keys to string values")
+        return
+    entries = [line for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    if not entries:
+        errors.append("metadata must contain at least one string key/value entry")
+        return
+    entry_indent: int | None = None
+    seen: set[str] = set()
+    for line in entries:
+        stripped = line.strip()
+        prefix = line[: len(line) - len(line.lstrip(" \t"))]
+        if stripped.startswith("- "):
+            errors.append("metadata must be a mapping, not a sequence")
+            return
+        if "\t" in prefix:
+            errors.append("metadata entries must use spaces, not tabs, for indentation")
+            return
+        indent = len(prefix)
+        if entry_indent is None:
+            entry_indent = indent
+        elif indent != entry_indent:
+            errors.append("metadata must be a flat string-to-string mapping with consistent indentation")
+            return
+        match = re.fullmatch(r"(?P<key>[^:#][^:]*):\s+(?P<value>.+)", stripped)
+        if not match:
+            errors.append("metadata must contain string key/value entries")
+            return
+        key = match.group("key").strip()
+        value = match.group("value").strip()
+        if key in seen:
+            errors.append(f"metadata key '{key}' is declared more than once")
+            return
+        seen.add(key)
+        quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+        invalid_single_quote = quoted and value.startswith("'") and "'" in value[1:-1].replace("''", "")
+        invalid_double_quote = False
+        if quoted and value.startswith('"'):
+            try:
+                invalid_double_quote = not isinstance(json.loads(value), str)
+            except json.JSONDecodeError:
+                invalid_double_quote = True
+        invalid_plain = not quoted and (
+            yaml_plain_scalar_has_forbidden_prefix(value)
+            or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
+            or bool(YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value))
+            or bool(re.search(r":\s", value))
+        )
+        mismatched_quote = (value.startswith(("'", '"')) or value.endswith(("'", '"'))) and not quoted
+        if invalid_single_quote or invalid_double_quote or invalid_plain or mismatched_quote:
+            errors.append(f"metadata value for '{key}' must be a YAML string scalar")
+            return
 
 
 def validate_skill_directory(skill_dir: Path, expected_name: str | None = None) -> dict[str, Any]:
@@ -1810,16 +1888,7 @@ def validate_skill_directory(skill_dir: Path, expected_name: str | None = None) 
     if compatibility is not None and (not compatibility or len(compatibility) > 500):
         errors.append("compatibility must contain 1-500 characters when provided")
 
-    raw_metadata = parsed["rawFields"].get("metadata")
-    if raw_metadata:
-        metadata_value, metadata_lines = raw_metadata
-        if metadata_value.strip() and not metadata_value.strip().startswith("{"):
-            errors.append("metadata must be a YAML mapping from string keys to string values")
-        for line in metadata_lines:
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and not re.match(r"^[^:#]+:\s*.+$", stripped):
-                errors.append("metadata must contain string key/value entries")
-                break
+    validate_metadata_mapping(parsed["rawFields"].get("metadata"), errors)
 
     unknown = sorted(set(fields) - AGENT_SKILL_FRONTMATTER_FIELDS)
     return {

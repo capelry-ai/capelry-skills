@@ -90,6 +90,8 @@ YAML_NON_STRING_PLAIN_PATTERN = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?)$",
     re.IGNORECASE,
 )
+YAML_BLOCK_SCALAR_PATTERN = re.compile(r"^[>|](?:(?:[1-9][+-]?)|(?:[+-][1-9]?))?$")
+YAML_FORBIDDEN_PLAIN_PREFIXES = ("@", "`", "!", "&", "*", "#", "%", ",", "[", "]", "{", "}", "|", ">")
 
 
 def eprint(*parts: object) -> None:
@@ -221,6 +223,21 @@ def remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def is_yaml_block_scalar(value: str) -> bool:
+    return bool(YAML_BLOCK_SCALAR_PATTERN.fullmatch(value.strip()))
+
+
+def yaml_block_scalar_indent(value: str) -> int | None:
+    match = re.search(r"[1-9]", value)
+    return int(match.group()) if match else None
+
+
+def yaml_plain_scalar_has_forbidden_prefix(value: str) -> bool:
+    if value.startswith(YAML_FORBIDDEN_PLAIN_PREFIXES):
+        return True
+    return bool(re.match(r"^[-?:](?:\s|$)", value))
+
+
 def yaml_scalar(value: str) -> str:
     value = value.strip()
     quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
@@ -245,12 +262,12 @@ def validate_frontmatter_structure(lines: list[str]) -> None:
         if line.startswith((" ", "\t")):
             if current_key is None:
                 raise SystemExit(f"Installed SKILL.md frontmatter line {line_number} is indented without a field")
-            if current_value and not re.fullmatch(r"[>|][+-]?", current_value):
+            if current_value and not is_yaml_block_scalar(current_value):
                 raise SystemExit(
                     f"Installed SKILL.md field '{current_key}' cannot continue a non-block scalar; "
                     "use | or > for multiline values"
                 )
-            if re.fullmatch(r"[>|][+-]?", current_value):
+            if is_yaml_block_scalar(current_value):
                 prefix = line[: len(line) - len(line.lstrip(" \t"))]
                 if "\t" in prefix:
                     raise SystemExit(
@@ -275,7 +292,7 @@ def validate_frontmatter_structure(lines: list[str]) -> None:
         seen.add(key)
         current_key = key
         current_value = (match.group("value") or "").strip()
-        block_indent = None
+        block_indent = yaml_block_scalar_indent(current_value) if is_yaml_block_scalar(current_value) else None
 
 
 def frontmatter_scalar(lines: list[str], key: str) -> str | None:
@@ -291,7 +308,7 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
                 break
             if following.strip() and not following.lstrip().startswith("#"):
                 continuation.append(following.strip())
-        if value and not re.fullmatch(r"[>|][+-]?", value):
+        if value and not is_yaml_block_scalar(value):
             if continuation:
                 raise SystemExit(
                     f"Installed SKILL.md field '{key}' cannot continue a non-block scalar; "
@@ -306,7 +323,7 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
             if (value.startswith(("'", '"')) or value.endswith(("'", '"'))) and not quoted:
                 raise SystemExit(f"Installed SKILL.md field '{key}' must be a valid YAML string")
             if not quoted and (
-                value.startswith(("[", "{"))
+                yaml_plain_scalar_has_forbidden_prefix(value)
                 or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
                 or YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value)
                 or re.search(r":\s", value)
@@ -319,6 +336,58 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
             raise SystemExit(f"Installed SKILL.md field '{key}' must be a string, not a sequence or mapping")
         return ("\n" if value.startswith("|") else " ").join(continuation).strip()
     return None
+
+
+def validate_metadata_mapping(lines: list[str]) -> None:
+    pattern = re.compile(r"^metadata:\s*(?P<value>.*)$")
+    for index, line in enumerate(lines):
+        match = pattern.match(line)
+        if not match:
+            continue
+        if match.group("value").strip():
+            raise SystemExit("Installed SKILL.md metadata must use an indented string-to-string mapping")
+        entries: list[str] = []
+        for following in lines[index + 1 :]:
+            if following and not following.startswith((" ", "\t")):
+                break
+            if following.strip() and not following.lstrip().startswith("#"):
+                entries.append(following)
+        if not entries:
+            raise SystemExit("Installed SKILL.md metadata must contain at least one string key/value entry")
+        entry_indent: int | None = None
+        seen: set[str] = set()
+        for entry in entries:
+            stripped = entry.strip()
+            prefix = entry[: len(entry) - len(entry.lstrip(" \t"))]
+            if stripped.startswith("- "):
+                raise SystemExit("Installed SKILL.md metadata must be a mapping, not a sequence")
+            if "\t" in prefix:
+                raise SystemExit("Installed SKILL.md metadata entries must use spaces, not tabs")
+            indent = len(prefix)
+            if entry_indent is None:
+                entry_indent = indent
+            elif indent != entry_indent:
+                raise SystemExit("Installed SKILL.md metadata must be a flat mapping with consistent indentation")
+            item = re.fullmatch(r"(?P<key>[^:#][^:]*):\s+(?P<value>.+)", stripped)
+            if not item:
+                raise SystemExit("Installed SKILL.md metadata must contain string key/value entries")
+            key = item.group("key").strip()
+            value = item.group("value").strip()
+            if key in seen:
+                raise SystemExit(f"Installed SKILL.md metadata key '{key}' is declared more than once")
+            seen.add(key)
+            quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+            invalid_single_quote = quoted and value.startswith("'") and "'" in value[1:-1].replace("''", "")
+            invalid_plain = not quoted and (
+                yaml_plain_scalar_has_forbidden_prefix(value)
+                or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
+                or YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value)
+                or re.search(r":\s", value)
+            )
+            mismatched_quote = (value.startswith(("'", '"')) or value.endswith(("'", '"'))) and not quoted
+            if invalid_single_quote or invalid_plain or mismatched_quote:
+                raise SystemExit(f"Installed SKILL.md metadata value for '{key}' must be a YAML string scalar")
+        return
 
 
 def validate_skill_directory(skill_dir: Path, expected_name: str) -> dict[str, str | int]:
@@ -341,6 +410,7 @@ def validate_skill_directory(skill_dir: Path, expected_name: str) -> dict[str, s
     frontmatter_scalar(frontmatter, "license")
     compatibility = frontmatter_scalar(frontmatter, "compatibility")
     frontmatter_scalar(frontmatter, "allowed-tools")
+    validate_metadata_mapping(frontmatter)
     if not name or len(name) > 64 or not SKILL_NAME_PATTERN.fullmatch(name):
         raise SystemExit("Installed SKILL.md name must be 1-64 lowercase letters, numbers, or single hyphens")
     if name != expected_name:

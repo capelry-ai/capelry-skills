@@ -147,6 +147,23 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
         )
 
     @classmethod
+    def forbidden_prefix_skill_zip(cls) -> bytes:
+        return cls.zip_bytes(
+            {"SKILL.md": "---\nname: forbidden-prefix\ndescription: @foo\n---\n\n# Forbidden prefix\n"}
+        )
+
+    @classmethod
+    def metadata_sequence_skill_zip(cls) -> bytes:
+        return cls.zip_bytes(
+            {
+                "SKILL.md": (
+                    "---\nname: metadata-sequence\ndescription: Fixture. Use for metadata validation.\n"
+                    "metadata:\n  - owner: fixture\n---\n\n# Metadata sequence\n"
+                )
+            }
+        )
+
+    @classmethod
     def mismatched_skill_zip(cls) -> bytes:
         return cls.zip_bytes({"SKILL.md": cls.skill_md("redirected-skill")})
 
@@ -225,6 +242,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
             "malformed-single-quote",
             "compatibility-sequence",
             "invalid-block-indent",
+            "forbidden-prefix",
+            "metadata-sequence",
             "mismatched",
         }:
             archive_name = {
@@ -235,6 +254,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 "malformed-single-quote": "malformed-single-quote.zip",
                 "compatibility-sequence": "compatibility-sequence.zip",
                 "invalid-block-indent": "invalid-block-indent.zip",
+                "forbidden-prefix": "forbidden-prefix.zip",
+                "metadata-sequence": "metadata-sequence.zip",
                 "mismatched": "mismatched.zip",
             }[kind]
             archive_bytes = {
@@ -245,6 +266,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 "malformed-single-quote": self.malformed_single_quote_skill_zip(),
                 "compatibility-sequence": self.compatibility_sequence_skill_zip(),
                 "invalid-block-indent": self.invalid_block_indent_skill_zip(),
+                "forbidden-prefix": self.forbidden_prefix_skill_zip(),
+                "metadata-sequence": self.metadata_sequence_skill_zip(),
                 "mismatched": self.mismatched_skill_zip(),
             }[kind]
             slug = {
@@ -255,6 +278,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 "malformed-single-quote": "malformed-single-quote",
                 "compatibility-sequence": "compatibility-sequence",
                 "invalid-block-indent": "invalid-block-indent",
+                "forbidden-prefix": "forbidden-prefix",
+                "metadata-sequence": "metadata-sequence",
                 "mismatched": "planned-skill",
             }[kind]
             entry.update(
@@ -340,6 +365,12 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
         if self.path == "/archives/invalid-block-indent.zip":
             self.send_bytes(self.invalid_block_indent_skill_zip(), "application/zip")
             return
+        if self.path == "/archives/forbidden-prefix.zip":
+            self.send_bytes(self.forbidden_prefix_skill_zip(), "application/zip")
+            return
+        if self.path == "/archives/metadata-sequence.zip":
+            self.send_bytes(self.metadata_sequence_skill_zip(), "application/zip")
+            return
         if self.path == "/archives/mismatched.zip":
             self.send_bytes(self.mismatched_skill_zip(), "application/zip")
             return
@@ -370,6 +401,10 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 kind = "compatibility-sequence"
             elif "invalid-block-indent" in filter_value:
                 kind = "invalid-block-indent"
+            elif "forbidden-prefix" in filter_value:
+                kind = "forbidden-prefix"
+            elif "metadata-sequence" in filter_value:
+                kind = "metadata-sequence"
             elif "planned-skill" in filter_value:
                 kind = "mismatched"
             elif "source-skill" in filter_value:
@@ -973,6 +1008,49 @@ class CapelryScriptTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "cannot continue a non-block scalar"):
                 bootstrap.validate_skill_directory(skill_dir, "continuation-skill")
 
+    def test_skill_validators_reject_forbidden_plain_scalar_prefixes(self) -> None:
+        capelry = load_module("capelry_forbidden_prefix_validation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_forbidden_prefix_validation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "prefix-skill"
+            skill_dir.mkdir()
+            for prefix in ("@foo", "`foo", "!foo", "&foo", "*foo", "%foo", "|foo", ">foo"):
+                (skill_dir / "SKILL.md").write_text(
+                    f"---\nname: prefix-skill\ndescription: {prefix}\n---\n\n# Instructions\n",
+                    encoding="utf-8",
+                )
+                report = capelry.validate_skill_directory(skill_dir)
+                self.assertFalse(report["valid"], prefix)
+                self.assertIn("must be a YAML string scalar", " ".join(report["errors"]))
+                with self.assertRaisesRegex(SystemExit, "must be a YAML string"):
+                    bootstrap.validate_skill_directory(skill_dir, "prefix-skill")
+
+    def test_metadata_must_be_a_string_to_string_mapping(self) -> None:
+        capelry = load_module("capelry_metadata_validation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_metadata_validation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "metadata-skill"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text(
+                "---\nname: metadata-skill\ndescription: Fixture. Use for metadata validation.\n"
+                "metadata:\n  owner: fixture\n  version: \"1.0\"\n---\n\n# Instructions\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
+            self.assertEqual(bootstrap.validate_skill_directory(skill_dir, "metadata-skill")["name"], "metadata-skill")
+
+            skill_file.write_text(
+                "---\nname: metadata-skill\ndescription: Fixture. Use for metadata validation.\n"
+                "metadata:\n  - owner: fixture\n---\n\n# Instructions\n",
+                encoding="utf-8",
+            )
+            report = capelry.validate_skill_directory(skill_dir)
+            self.assertFalse(report["valid"])
+            self.assertIn("metadata must be a mapping, not a sequence", report["errors"])
+            with self.assertRaisesRegex(SystemExit, "metadata must be a mapping, not a sequence"):
+                bootstrap.validate_skill_directory(skill_dir, "metadata-skill")
+
     def test_optional_portable_fields_must_be_string_scalars(self) -> None:
         capelry = load_module("capelry_optional_scalar_validation", CAPELRY_SCRIPT)
         bootstrap = load_module("bootstrap_optional_scalar_validation", BOOTSTRAP_SCRIPT)
@@ -1013,6 +1091,18 @@ class CapelryScriptTests(unittest.TestCase):
                 bootstrap.validate_skill_directory(skill_dir, "block-indent-skill")["name"],
                 "block-indent-skill",
             )
+
+            for marker in ("|2", "|2-", "|-2", ">2+", ">+2"):
+                skill_file.write_text(
+                    f"---\nname: block-indent-skill\ndescription: {marker}\n"
+                    "  explicit indentation\n---\n\n# Instructions\n",
+                    encoding="utf-8",
+                )
+                self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"], marker)
+                self.assertEqual(
+                    bootstrap.validate_skill_directory(skill_dir, "block-indent-skill")["name"],
+                    "block-indent-skill",
+                )
 
             for invalid_content in ("  good\n bad", "  good\n\tbad"):
                 skill_file.write_text(
@@ -1332,6 +1422,8 @@ class CapelryScriptTests(unittest.TestCase):
             for ref, expected_error in (
                 ("compatibility-sequence", "must be a string, not a sequence or mapping"),
                 ("invalid-block-indent", "block scalar field 'description'"),
+                ("forbidden-prefix", "must be a YAML string scalar"),
+                ("metadata-sequence", "metadata must be a mapping, not a sequence"),
             ):
                 dest = Path(tmpdir) / ref
                 dest.mkdir()
