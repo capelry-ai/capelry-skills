@@ -1014,7 +1014,7 @@ class CapelryScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             skill_dir = Path(tmpdir) / "prefix-skill"
             skill_dir.mkdir()
-            for prefix in ("@foo", "`foo", "!foo", "&foo", "*foo", "%foo", "|foo", ">foo"):
+            for prefix in ("@foo", "`foo", "!foo", "&foo", "*foo", "%foo", "|foo", ">foo", "true # documented"):
                 (skill_dir / "SKILL.md").write_text(
                     f"---\nname: prefix-skill\ndescription: {prefix}\n---\n\n# Instructions\n",
                     encoding="utf-8",
@@ -1050,6 +1050,30 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertIn("metadata must be a mapping, not a sequence", report["errors"])
             with self.assertRaisesRegex(SystemExit, "metadata must be a mapping, not a sequence"):
                 bootstrap.validate_skill_directory(skill_dir, "metadata-skill")
+
+            for invalid_key in ("@foo", "true"):
+                skill_file.write_text(
+                    "---\nname: metadata-skill\ndescription: Fixture. Use for metadata validation.\n"
+                    f"metadata:\n  {invalid_key}: bar\n---\n\n# Instructions\n",
+                    encoding="utf-8",
+                )
+                self.assertFalse(capelry.validate_skill_directory(skill_dir)["valid"])
+                with self.assertRaisesRegex(SystemExit, "metadata key"):
+                    bootstrap.validate_skill_directory(skill_dir, "metadata-skill")
+
+    def test_bootstrap_rejects_invalid_double_quoted_scalars(self) -> None:
+        capelry = load_module("capelry_double_quote_validation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_double_quote_validation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "double-quote-skill"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                '---\nname: double-quote-skill\ndescription: "bad\\q"\n---\n\n# Instructions\n',
+                encoding="utf-8",
+            )
+            self.assertFalse(capelry.validate_skill_directory(skill_dir)["valid"])
+            with self.assertRaisesRegex(SystemExit, "valid double-quoted YAML string"):
+                bootstrap.validate_skill_directory(skill_dir, "double-quote-skill")
 
     def test_optional_portable_fields_must_be_string_scalars(self) -> None:
         capelry = load_module("capelry_optional_scalar_validation", CAPELRY_SCRIPT)

@@ -1604,11 +1604,14 @@ def yaml_plain_scalar_has_forbidden_prefix(value: str) -> bool:
     return bool(re.match(r"^[-?:](?:\s|$)", value))
 
 
-def parse_yaml_scalar(value: str) -> str:
+def strip_yaml_inline_comment(value: str) -> str:
     value = value.strip()
     quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
-    if not quoted and " #" in value:
-        value = value.split(" #", 1)[0].rstrip()
+    return value if quoted or " #" not in value else value.split(" #", 1)[0].rstrip()
+
+
+def parse_yaml_scalar(value: str) -> str:
+    value = strip_yaml_inline_comment(value)
     if len(value) >= 2 and value[0] == value[-1] == "'":
         inner = value[1:-1]
         if "'" in inner.replace("''", ""):
@@ -1745,7 +1748,7 @@ def validate_scalar_shape(
     if key not in raw_fields:
         return
     raw, continuation = raw_fields[key]
-    value = raw.strip()
+    value = strip_yaml_inline_comment(raw)
     if value and not is_yaml_block_scalar(value):
         quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
         mismatched_quote = value.startswith(("'", '"')) or value.endswith(("'", '"'))
@@ -1805,7 +1808,24 @@ def validate_metadata_mapping(
             errors.append("metadata must contain string key/value entries")
             return
         key = match.group("key").strip()
-        value = match.group("value").strip()
+        value = strip_yaml_inline_comment(match.group("value"))
+        key_quoted = len(key) >= 2 and key[0] == key[-1] and key[0] in {"'", '"'}
+        invalid_key_single = key_quoted and key.startswith("'") and "'" in key[1:-1].replace("''", "")
+        invalid_key_double = False
+        if key_quoted and key.startswith('"'):
+            try:
+                invalid_key_double = not isinstance(json.loads(key), str)
+            except json.JSONDecodeError:
+                invalid_key_double = True
+        invalid_key_plain = not key_quoted and (
+            yaml_plain_scalar_has_forbidden_prefix(key)
+            or key.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
+            or bool(YAML_NON_STRING_PLAIN_PATTERN.fullmatch(key))
+        )
+        mismatched_key_quote = (key.startswith(("'", '"')) or key.endswith(("'", '"'))) and not key_quoted
+        if invalid_key_single or invalid_key_double or invalid_key_plain or mismatched_key_quote:
+            errors.append(f"metadata key '{key}' must be a YAML string scalar")
+            return
         if key in seen:
             errors.append(f"metadata key '{key}' is declared more than once")
             return
