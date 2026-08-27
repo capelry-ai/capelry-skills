@@ -979,6 +979,60 @@ class CapelryScriptTests(unittest.TestCase):
                 self.assertFalse(report["valid"], (name, description))
                 self.assertIn("YAML string scalar", " ".join(report["errors"]))
 
+    def test_skill_validators_reject_terminal_colons_in_plain_scalars(self) -> None:
+        capelry = load_module("capelry_terminal_colon", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_terminal_colon", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "terminal-colon"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            fixtures = (
+                "description: foo:\n",
+                "description: Valid description.\nlicense: MIT:\n",
+                "description: Valid description.\ncompatibility: linux:\n",
+                "description: Valid description.\nallowed-tools: shell:\n",
+                "description: Valid description.\nmetadata:\n  owner: fixture:\n",
+            )
+            for fields in fixtures:
+                skill_file.write_text(f"---\nname: terminal-colon\n{fields}---\n# Body\n", encoding="utf-8")
+                report = capelry.validate_skill_directory(skill_dir)
+                self.assertFalse(report["valid"], fields)
+                with self.assertRaisesRegex(SystemExit, "must be a YAML string"):
+                    bootstrap.validate_skill_directory(skill_dir, "terminal-colon")
+
+            skill_file.write_text(
+                '---\nname: terminal-colon\ndescription: "foo:"\nmetadata:\n  owner: "fixture:"\n---\n# Body\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
+            bootstrap.validate_skill_directory(skill_dir, "terminal-colon")
+
+    def test_skill_validators_reject_yaml_forbidden_c1_characters(self) -> None:
+        capelry = load_module("capelry_c1_controls", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_c1_controls", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "c1-controls"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            for forbidden in ("\u007f", "\u0080", "\u0084", "\u0086", "\u009f", "\ufffe", "\uffff"):
+                skill_file.write_text(
+                    f'---\nname: c1-controls\ndescription: "ok{forbidden}bad"\n---\n# Body\n',
+                    encoding="utf-8",
+                )
+                report = capelry.validate_skill_directory(skill_dir)
+                self.assertFalse(report["valid"], hex(ord(forbidden)))
+                self.assertIn("YAML-forbidden control characters", " ".join(report["errors"]))
+                with self.assertRaisesRegex(SystemExit, "YAML-forbidden control characters"):
+                    bootstrap.validate_skill_directory(skill_dir, "c1-controls")
+
+            allowed = '---\r\nname: c1-controls\r\ndescription: "a\u0085b"\r\n---\r\n# Body\r\n'
+            skill_file.write_text(allowed, encoding="utf-8", newline="")
+            report = capelry.validate_skill_directory(skill_dir)
+            bootstrap_report = bootstrap.validate_skill_directory(skill_dir, "c1-controls")
+            self.assertTrue(report["valid"])
+            self.assertEqual(report["descriptionLength"], 3)
+            self.assertEqual(bootstrap_report["descriptionLength"], 3)
+
     def test_skill_validators_reject_non_block_scalar_continuations(self) -> None:
         capelry = load_module("capelry_continuation_validation", CAPELRY_SCRIPT)
         bootstrap = load_module("bootstrap_continuation_validation", BOOTSTRAP_SCRIPT)
@@ -1630,6 +1684,8 @@ class CapelryScriptTests(unittest.TestCase):
             "chomp-invalid": f"---\nname: chomp-invalid\ndescription: |+\n  a{long_blank_lines}---\n# Body\n",
             "quoted-invalid": "---\nname: ' quoted-invalid '\ndescription: Valid description.\n---\n# Body\n",
             "tab-invalid": "---\nname: tab-invalid\ndescription: true\t# documented\n---\n# Body\n",
+            "terminal-colon": "---\nname: terminal-colon\ndescription: invalid:\n---\n# Body\n",
+            "c1-invalid": "---\nname: c1-invalid\ndescription: invalid\u0080control\n---\n# Body\n",
             "metadata-invalid": (
                 "---\nname: metadata-invalid\ndescription: Validate equivalent metadata keys.\n"
                 "metadata:\n  foo: one\n  'foo': two\n---\n# Body\n"
@@ -1665,6 +1721,8 @@ class CapelryScriptTests(unittest.TestCase):
             "chomp-invalid": f"---\nname: chomp-invalid\ndescription: |+\n  a{long_blank_lines}---\n# Capelry\n",
             "quoted-invalid": "---\nname: ' quoted-invalid '\ndescription: Valid description.\n---\n# Capelry\n",
             "tab-invalid": "---\nname: tab-invalid\ndescription: true\t# documented\n---\n# Capelry\n",
+            "terminal-colon": "---\nname: terminal-colon\ndescription: invalid:\n---\n# Capelry\n",
+            "c1-invalid": "---\nname: c1-invalid\ndescription: invalid\u0080control\n---\n# Capelry\n",
             "metadata-invalid": (
                 "---\nname: metadata-invalid\ndescription: Validate equivalent metadata keys.\n"
                 "metadata:\n  foo: one\n  'foo': two\n---\n# Capelry\n"

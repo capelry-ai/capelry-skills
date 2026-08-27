@@ -471,7 +471,7 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
                 yaml_plain_scalar_has_forbidden_prefix(value)
                 or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
                 or YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value)
-                or re.search(r":\s", value)
+                or re.search(r":(?:\s|$)", value)
             ):
                 raise SystemExit(f"Installed SKILL.md field '{key}' must be a YAML string")
             return yaml_scalar(value)
@@ -547,7 +547,7 @@ def validate_metadata_mapping(lines: list[str]) -> None:
                 yaml_plain_scalar_has_forbidden_prefix(value)
                 or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
                 or YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value)
-                or re.search(r":\s", value)
+                or re.search(r":(?:\s|$)", value)
             )
             mismatched_quote = (value.startswith(("'", '"')) or value.endswith(("'", '"'))) and not quoted
             if invalid_single_quote or invalid_double_quote or invalid_plain or mismatched_quote:
@@ -562,9 +562,9 @@ def validate_skill_directory(skill_dir: Path, expected_name: str) -> dict[str, s
     except (OSError, UnicodeError) as error:
         raise SystemExit(f"Installed skill has no readable UTF-8 SKILL.md: {error}") from error
     clean_text = text.lstrip("\ufeff")
-    if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", clean_text):
+    if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ufffe\uffff]", clean_text):
         raise SystemExit("Installed SKILL.md contains YAML-forbidden control characters")
-    lines = clean_text.splitlines()
+    lines = clean_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     if not lines or lines[0] != "---":
         raise SystemExit("Installed SKILL.md must start with YAML frontmatter delimited by ---")
     try:
