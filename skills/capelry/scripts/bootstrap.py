@@ -238,7 +238,18 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
         if not match:
             continue
         value = match.group("value").strip()
+        continuation: list[str] = []
+        for following in lines[index + 1 :]:
+            if following and not following.startswith((" ", "\t")):
+                break
+            if following.strip() and not following.lstrip().startswith("#"):
+                continuation.append(following.strip())
         if value and not re.fullmatch(r"[>|][+-]?", value):
+            if continuation:
+                raise SystemExit(
+                    f"Installed SKILL.md field '{key}' cannot continue a non-block scalar; "
+                    "use | or > for multiline values"
+                )
             quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
             if (value.startswith(("'", '"')) or value.endswith(("'", '"'))) and not quoted:
                 raise SystemExit(f"Installed SKILL.md field '{key}' must be a valid YAML string")
@@ -250,12 +261,6 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
             ):
                 raise SystemExit(f"Installed SKILL.md field '{key}' must be a YAML string")
             return yaml_scalar(value)
-        continuation: list[str] = []
-        for following in lines[index + 1 :]:
-            if following and not following.startswith((" ", "\t")):
-                break
-            if following.strip():
-                continuation.append(following.strip())
         if not continuation:
             return ""
         return ("\n" if value.startswith("|") else " ").join(continuation).strip()

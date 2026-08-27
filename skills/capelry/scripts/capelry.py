@@ -1651,7 +1651,14 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
             if current_key is None:
                 errors.append(f"frontmatter line {line_number} is indented without a parent field")
             else:
-                raw_fields[current_key][1].append(line)
+                raw_value, continuation = raw_fields[current_key]
+                if raw_value.strip() and not re.fullmatch(r"[>|][+-]?", raw_value.strip()):
+                    errors.append(
+                        f"frontmatter line {line_number} cannot continue non-block scalar field '{current_key}'; "
+                        "use | or > for multiline values"
+                    )
+                else:
+                    continuation.append(line)
             continue
         match = field_pattern.match(line)
         if not match:

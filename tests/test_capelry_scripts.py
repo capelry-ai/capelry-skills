@@ -103,6 +103,17 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
         return cls.zip_bytes({"SKILL.md": "---\nname: invalid-skill\n---\n\n# Missing description\n"})
 
     @classmethod
+    def malformed_yaml_skill_zip(cls) -> bytes:
+        return cls.zip_bytes(
+            {
+                "SKILL.md": (
+                    '---\nname: malformed-yaml\ndescription: "valid"\n'
+                    "  invalid continuation\n---\n\n# Malformed YAML\n"
+                )
+            }
+        )
+
+    @classmethod
     def mismatched_skill_zip(cls) -> bytes:
         return cls.zip_bytes({"SKILL.md": cls.skill_md("redirected-skill")})
 
@@ -173,23 +184,26 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                     },
                 }
             )
-        elif kind in {"unsafe", "backslash-unsafe", "invalid", "mismatched"}:
+        elif kind in {"unsafe", "backslash-unsafe", "invalid", "malformed-yaml", "mismatched"}:
             archive_name = {
                 "unsafe": "unsafe.zip",
                 "backslash-unsafe": "backslash-unsafe.zip",
                 "invalid": "invalid.zip",
+                "malformed-yaml": "malformed-yaml.zip",
                 "mismatched": "mismatched.zip",
             }[kind]
             archive_bytes = {
                 "unsafe": self.unsafe_skill_zip(),
                 "backslash-unsafe": self.backslash_unsafe_skill_zip(),
                 "invalid": self.invalid_skill_zip(),
+                "malformed-yaml": self.malformed_yaml_skill_zip(),
                 "mismatched": self.mismatched_skill_zip(),
             }[kind]
             slug = {
                 "unsafe": "unsafe-zip",
                 "backslash-unsafe": "backslash-unsafe",
                 "invalid": "invalid-skill",
+                "malformed-yaml": "malformed-yaml",
                 "mismatched": "planned-skill",
             }[kind]
             entry.update(
@@ -263,6 +277,9 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
         if self.path == "/archives/invalid.zip":
             self.send_bytes(self.invalid_skill_zip(), "application/zip")
             return
+        if self.path == "/archives/malformed-yaml.zip":
+            self.send_bytes(self.malformed_yaml_skill_zip(), "application/zip")
+            return
         if self.path == "/archives/mismatched.zip":
             self.send_bytes(self.mismatched_skill_zip(), "application/zip")
             return
@@ -285,6 +302,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 kind = "unsafe"
             elif "invalid-skill" in filter_value:
                 kind = "invalid"
+            elif "malformed-yaml" in filter_value:
+                kind = "malformed-yaml"
             elif "planned-skill" in filter_value:
                 kind = "mismatched"
             elif "source-skill" in filter_value:
@@ -858,6 +877,36 @@ class CapelryScriptTests(unittest.TestCase):
                 self.assertFalse(report["valid"], (name, description))
                 self.assertIn("YAML string scalar", " ".join(report["errors"]))
 
+    def test_skill_validators_reject_non_block_scalar_continuations(self) -> None:
+        capelry = load_module("capelry_continuation_validation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_continuation_validation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "continuation-skill"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text(
+                "---\nname: continuation-skill\ndescription: >\n"
+                "  Valid block scalar.\n  Use when validating multiline fields.\n"
+                "---\n\n# Instructions\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
+            self.assertEqual(
+                bootstrap.validate_skill_directory(skill_dir, "continuation-skill")["name"],
+                "continuation-skill",
+            )
+
+            skill_file.write_text(
+                '---\nname: continuation-skill\ndescription: "valid"\n'
+                "  invalid continuation\n---\n\n# Instructions\n",
+                encoding="utf-8",
+            )
+            report = capelry.validate_skill_directory(skill_dir)
+            self.assertFalse(report["valid"])
+            self.assertIn("cannot continue non-block scalar", " ".join(report["errors"]))
+            with self.assertRaisesRegex(SystemExit, "cannot continue a non-block scalar"):
+                bootstrap.validate_skill_directory(skill_dir, "continuation-skill")
+
     def test_skill_validators_preserve_hashes_inside_quoted_descriptions(self) -> None:
         capelry = load_module("capelry_quoted_hash_validation", CAPELRY_SCRIPT)
         bootstrap = load_module("bootstrap_quoted_hash_validation", BOOTSTRAP_SCRIPT)
@@ -1057,6 +1106,41 @@ class CapelryScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("description", result.stderr)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "original")
+            self.assertIn("Existing valid skill", (dest / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_malformed_yaml_cannot_replace_existing_install(self) -> None:
+        with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "malformed-yaml"
+            dest.mkdir()
+            (dest / "SKILL.md").write_text(
+                RegistryFixtureHandler.skill_md(
+                    "malformed-yaml",
+                    "Existing valid skill. Use for malformed YAML rollback testing.",
+                ),
+                encoding="utf-8",
+            )
+            marker = dest / "preserve-me.txt"
+            marker.write_text("original", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "install",
+                    "capelry-ai/capelry-skills/malformed-yaml",
+                    "--dest",
+                    str(dest),
+                    "--force",
+                ],
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cannot continue non-block scalar", result.stderr)
             self.assertEqual(marker.read_text(encoding="utf-8"), "original")
             self.assertIn("Existing valid skill", (dest / "SKILL.md").read_text(encoding="utf-8"))
 
