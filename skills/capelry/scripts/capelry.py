@@ -1784,7 +1784,7 @@ def block_scalar_indentation_error(marker: str, continuation: list[str]) -> str 
 
 
 def parse_skill_frontmatter(text: str) -> dict[str, Any]:
-    clean_text = text.lstrip("\ufeff")
+    clean_text = text[1:] if text.startswith("\ufeff") else text
     lines = (
         clean_text.replace("\r\n", "\n")
         .replace("\r", "\n")
@@ -1818,7 +1818,7 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
 
     raw_fields: dict[str, tuple[str, list[str]]] = {}
     current_key: str | None = None
-    field_pattern = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?:\s*(?P<value>.*))?$")
+    field_pattern = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?:[ \t]+(?P<value>.*))?$")
     for line_number, line in enumerate(lines[1:closing], start=2):
         if not line.strip():
             if current_key is not None:

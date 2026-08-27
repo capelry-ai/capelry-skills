@@ -1129,6 +1129,21 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
             bootstrap.validate_skill_directory(skill_dir, "empty-metadata")
 
+    def test_skill_validators_require_mapping_separation_and_single_bom(self) -> None:
+        capelry = load_module("capelry_mapping_separation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_mapping_separation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "mapping-separation"
+            skill_dir.mkdir()
+            for text in (
+                "---\nname:mapping-separation\ndescription:bar\n---\n# Body\n",
+                "\ufeff\ufeff---\nname: mapping-separation\ndescription: bar\n---\n# Body\n",
+            ):
+                (skill_dir / "SKILL.md").write_text(text, encoding="utf-8")
+                self.assertFalse(capelry.validate_skill_directory(skill_dir)["valid"])
+                with self.assertRaises(SystemExit):
+                    bootstrap.validate_skill_directory(skill_dir, "mapping-separation")
+
     def test_skill_validators_reject_non_block_scalar_continuations(self) -> None:
         capelry = load_module("capelry_continuation_validation", CAPELRY_SCRIPT)
         bootstrap = load_module("bootstrap_continuation_validation", BOOTSTRAP_SCRIPT)

@@ -387,7 +387,7 @@ def render_yaml_block_scalar(marker: str, continuation: list[str]) -> str:
 
 
 def validate_frontmatter_structure(lines: list[str]) -> None:
-    field_pattern = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?:\s*(?P<value>.*))?$")
+    field_pattern = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?:[ \t]+(?P<value>.*))?$")
     seen: set[str] = set()
     current_key: str | None = None
     current_value = ""
@@ -578,7 +578,7 @@ def validate_skill_directory(skill_dir: Path, expected_name: str) -> dict[str, s
         text = skill_file.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
         raise SystemExit(f"Installed skill has no readable UTF-8 SKILL.md: {error}") from error
-    clean_text = text.lstrip("\ufeff")
+    clean_text = text[1:] if text.startswith("\ufeff") else text
     if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ufffe\uffff]", clean_text):
         raise SystemExit("Installed SKILL.md contains YAML-forbidden control characters")
     lines = (
