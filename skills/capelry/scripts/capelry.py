@@ -1610,6 +1610,32 @@ def strip_yaml_inline_comment(value: str) -> str:
     return value if quoted or " #" not in value else value.split(" #", 1)[0].rstrip()
 
 
+def valid_yaml_double_quoted(value: str) -> bool:
+    inner = value[1:-1]
+    index = 0
+    while index < len(inner):
+        if inner[index] != "\\":
+            if inner[index] == '"':
+                return False
+            index += 1
+            continue
+        index += 1
+        if index >= len(inner):
+            return False
+        escape = inner[index]
+        if escape in set('0abtnvfre /N_LP') | {'\\', '"'}:
+            index += 1
+        elif escape in "xuU":
+            width = {"x": 2, "u": 4, "U": 8}[escape]
+            digits = inner[index + 1 : index + 1 + width]
+            if len(digits) != width or not all(char in "0123456789abcdefABCDEF" for char in digits):
+                return False
+            index += width + 1
+        else:
+            return False
+    return True
+
+
 def parse_yaml_scalar(value: str) -> str:
     value = strip_yaml_inline_comment(value)
     if len(value) >= 2 and value[0] == value[-1] == "'":
@@ -1630,8 +1656,11 @@ def parse_yaml_scalar(value: str) -> str:
 def frontmatter_value(raw: str, continuation: list[str]) -> str:
     marker = raw.strip()
     if is_yaml_block_scalar(marker):
-        content = [line.strip() for line in continuation if line.strip()]
-        return ("\n" if marker.startswith("|") else " ").join(content).strip()
+        nonblank = [line for line in continuation if line.strip()]
+        explicit = yaml_block_scalar_indent(marker)
+        required = explicit or (len(nonblank[0]) - len(nonblank[0].lstrip()) if nonblank else 0)
+        content = [line[required:] for line in continuation]
+        return ("\n" if marker.startswith("|") else " ").join(content).rstrip("\n")
     content = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
     value = parse_yaml_scalar(marker)
     if content:
@@ -1758,10 +1787,7 @@ def validate_scalar_shape(
         mismatched_quote = value.startswith(("'", '"')) or value.endswith(("'", '"'))
         invalid_double_quote = False
         if quoted and value.startswith('"'):
-            try:
-                invalid_double_quote = not isinstance(json.loads(value), str)
-            except json.JSONDecodeError:
-                invalid_double_quote = True
+            invalid_double_quote = not valid_yaml_double_quoted(value)
         invalid_plain = not quoted and (
             yaml_plain_scalar_has_forbidden_prefix(value)
             or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
@@ -1817,10 +1843,7 @@ def validate_metadata_mapping(
         invalid_key_single = key_quoted and key.startswith("'") and "'" in key[1:-1].replace("''", "")
         invalid_key_double = False
         if key_quoted and key.startswith('"'):
-            try:
-                invalid_key_double = not isinstance(json.loads(key), str)
-            except json.JSONDecodeError:
-                invalid_key_double = True
+            invalid_key_double = not valid_yaml_double_quoted(key)
         invalid_key_plain = not key_quoted and (
             yaml_plain_scalar_has_forbidden_prefix(key)
             or key.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
@@ -1838,10 +1861,7 @@ def validate_metadata_mapping(
         invalid_single_quote = quoted and value.startswith("'") and "'" in value[1:-1].replace("''", "")
         invalid_double_quote = False
         if quoted and value.startswith('"'):
-            try:
-                invalid_double_quote = not isinstance(json.loads(value), str)
-            except json.JSONDecodeError:
-                invalid_double_quote = True
+            invalid_double_quote = not valid_yaml_double_quoted(value)
         invalid_plain = not quoted and (
             yaml_plain_scalar_has_forbidden_prefix(value)
             or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}

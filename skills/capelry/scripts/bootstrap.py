@@ -245,6 +245,32 @@ def strip_yaml_inline_comment(value: str) -> str:
     return value if quoted or " #" not in value else value.split(" #", 1)[0].rstrip()
 
 
+def valid_yaml_double_quoted(value: str) -> bool:
+    inner = value[1:-1]
+    index = 0
+    while index < len(inner):
+        if inner[index] != "\\":
+            if inner[index] == '"':
+                return False
+            index += 1
+            continue
+        index += 1
+        if index >= len(inner):
+            return False
+        escape = inner[index]
+        if escape in set('0abtnvfre /N_LP') | {'\\', '"'}:
+            index += 1
+        elif escape in "xuU":
+            width = {"x": 2, "u": 4, "U": 8}[escape]
+            digits = inner[index + 1 : index + 1 + width]
+            if len(digits) != width or not all(char in "0123456789abcdefABCDEF" for char in digits):
+                return False
+            index += width + 1
+        else:
+            return False
+    return True
+
+
 def yaml_scalar(value: str) -> str:
     value = strip_yaml_inline_comment(value)
     quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
@@ -268,7 +294,7 @@ def validate_frontmatter_structure(lines: list[str]) -> None:
         if line.startswith((" ", "\t")):
             if current_key is None:
                 raise SystemExit(f"Installed SKILL.md frontmatter line {line_number} is indented without a field")
-            if current_value and not is_yaml_block_scalar(current_value):
+            if current_key != "metadata" and not is_yaml_block_scalar(current_value):
                 raise SystemExit(
                     f"Installed SKILL.md field '{current_key}' cannot continue a non-block scalar; "
                     "use | or > for multiline values"
@@ -313,7 +339,7 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
             if following and not following.startswith((" ", "\t")):
                 break
             if following.strip() and (is_yaml_block_scalar(value) or not following.lstrip().startswith("#")):
-                continuation.append(following.strip())
+                continuation.append(following)
         if value and not is_yaml_block_scalar(value):
             if continuation:
                 raise SystemExit(
@@ -326,12 +352,8 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
                     f"Installed SKILL.md field '{key}' contains an unescaped apostrophe in a "
                     "single-quoted YAML scalar; escape it as ''"
                 )
-            if quoted and value.startswith('"'):
-                try:
-                    if not isinstance(json.loads(value), str):
-                        raise ValueError
-                except (json.JSONDecodeError, ValueError) as error:
-                    raise SystemExit(f"Installed SKILL.md field '{key}' must be a valid double-quoted YAML string") from error
+            if quoted and value.startswith('"') and not valid_yaml_double_quoted(value):
+                raise SystemExit(f"Installed SKILL.md field '{key}' must be a valid double-quoted YAML string")
             if (value.startswith(("'", '"')) or value.endswith(("'", '"'))) and not quoted:
                 raise SystemExit(f"Installed SKILL.md field '{key}' must be a valid YAML string")
             if not quoted and (
@@ -389,10 +411,7 @@ def validate_metadata_mapping(lines: list[str]) -> None:
             invalid_key_single = key_quoted and key.startswith("'") and "'" in key[1:-1].replace("''", "")
             invalid_key_double = False
             if key_quoted and key.startswith('"'):
-                try:
-                    invalid_key_double = not isinstance(json.loads(key), str)
-                except json.JSONDecodeError:
-                    invalid_key_double = True
+                invalid_key_double = not valid_yaml_double_quoted(key)
             invalid_key_plain = not key_quoted and (
                 yaml_plain_scalar_has_forbidden_prefix(key)
                 or key.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
@@ -408,10 +427,7 @@ def validate_metadata_mapping(lines: list[str]) -> None:
             invalid_single_quote = quoted and value.startswith("'") and "'" in value[1:-1].replace("''", "")
             invalid_double_quote = False
             if quoted and value.startswith('"'):
-                try:
-                    invalid_double_quote = not isinstance(json.loads(value), str)
-                except json.JSONDecodeError:
-                    invalid_double_quote = True
+                invalid_double_quote = not valid_yaml_double_quoted(value)
             invalid_plain = not quoted and (
                 yaml_plain_scalar_has_forbidden_prefix(value)
                 or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}

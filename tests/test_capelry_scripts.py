@@ -1019,6 +1019,7 @@ class CapelryScriptTests(unittest.TestCase):
             fixtures = (
                 "---\nname: lexical-skill\ndescription: |\n  valid\n  ---\ncompatibility:\n  - linux\n---\n# Body\n",
                 "---\nname: lexical-skill\ndescription: |\n  ok\n  #" + "x" * 1025 + "\n---\n# Body\n",
+                "---\nname: lexical-skill\ndescription: |\n  a\n" + " " * 1102 + "b\n---\n# Body\n",
                 "---\nname: lexical-skill\ndescription: ok\x00bad\n---\n# Body\n",
             )
             for fixture in fixtures:
@@ -1093,6 +1094,11 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertFalse(capelry.validate_skill_directory(skill_dir)["valid"])
             with self.assertRaisesRegex(SystemExit, "valid double-quoted YAML string"):
                 bootstrap.validate_skill_directory(skill_dir, "double-quote-skill")
+            (skill_dir / "SKILL.md").write_text(
+                '---\nname: double-quote-skill\ndescription: "a\\x41"\n---\n\n# Instructions\n', encoding="utf-8"
+            )
+            self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
+            bootstrap.validate_skill_directory(skill_dir, "double-quote-skill")
 
     def test_optional_portable_fields_must_be_string_scalars(self) -> None:
         capelry = load_module("capelry_optional_scalar_validation", CAPELRY_SCRIPT)
