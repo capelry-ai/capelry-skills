@@ -1619,6 +1619,22 @@ def frontmatter_value(raw: str, continuation: list[str]) -> str:
     return value
 
 
+def block_scalar_indentation_error(continuation: list[str]) -> str | None:
+    required_indent: int | None = None
+    for line in continuation:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        prefix = line[: len(line) - len(line.lstrip(" \t"))]
+        if "\t" in prefix:
+            return "must use spaces, not tabs, for indentation"
+        indent = len(prefix)
+        if required_indent is None:
+            required_indent = indent
+        elif indent < required_indent:
+            return f"must use at least {required_indent} spaces established by its first content line"
+    return None
+
+
 def parse_skill_frontmatter(text: str) -> dict[str, Any]:
     lines = text.lstrip("\ufeff").splitlines()
     errors: list[str] = []
@@ -1678,6 +1694,10 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
 
     fields: dict[str, Any] = {}
     for key, (raw, continuation) in raw_fields.items():
+        if re.fullmatch(r"[>|][+-]?", raw.strip()):
+            indentation_error = block_scalar_indentation_error(continuation)
+            if indentation_error:
+                errors.append(f"block scalar field '{key}' {indentation_error}")
         try:
             fields[key] = frontmatter_value(raw, continuation)
         except ValueError as error:
@@ -1700,7 +1720,7 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
     }
 
 
-def validate_required_scalar_shape(
+def validate_scalar_shape(
     raw_fields: dict[str, tuple[str, list[str]]],
     key: str,
     errors: list[str],
@@ -1770,8 +1790,8 @@ def validate_skill_directory(skill_dir: Path, expected_name: str | None = None) 
     name = fields.get("name", "")
     description = fields.get("description", "")
     compatibility = fields.get("compatibility")
-    validate_required_scalar_shape(parsed["rawFields"], "name", errors)
-    validate_required_scalar_shape(parsed["rawFields"], "description", errors)
+    for scalar_field in ("name", "description", "license", "compatibility", "allowed-tools"):
+        validate_scalar_shape(parsed["rawFields"], scalar_field, errors)
 
     if not name:
         errors.append("frontmatter field 'name' is required")

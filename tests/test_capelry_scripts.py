@@ -125,6 +125,28 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
         )
 
     @classmethod
+    def compatibility_sequence_skill_zip(cls) -> bytes:
+        return cls.zip_bytes(
+            {
+                "SKILL.md": (
+                    "---\nname: compatibility-sequence\ndescription: Fixture. Use for schema validation.\n"
+                    "compatibility:\n  - linux\n---\n\n# Compatibility sequence\n"
+                )
+            }
+        )
+
+    @classmethod
+    def invalid_block_indent_skill_zip(cls) -> bytes:
+        return cls.zip_bytes(
+            {
+                "SKILL.md": (
+                    "---\nname: invalid-block-indent\ndescription: |\n  good\n bad\n"
+                    "---\n\n# Invalid block indentation\n"
+                )
+            }
+        )
+
+    @classmethod
     def mismatched_skill_zip(cls) -> bytes:
         return cls.zip_bytes({"SKILL.md": cls.skill_md("redirected-skill")})
 
@@ -201,6 +223,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
             "invalid",
             "malformed-yaml",
             "malformed-single-quote",
+            "compatibility-sequence",
+            "invalid-block-indent",
             "mismatched",
         }:
             archive_name = {
@@ -209,6 +233,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 "invalid": "invalid.zip",
                 "malformed-yaml": "malformed-yaml.zip",
                 "malformed-single-quote": "malformed-single-quote.zip",
+                "compatibility-sequence": "compatibility-sequence.zip",
+                "invalid-block-indent": "invalid-block-indent.zip",
                 "mismatched": "mismatched.zip",
             }[kind]
             archive_bytes = {
@@ -217,6 +243,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 "invalid": self.invalid_skill_zip(),
                 "malformed-yaml": self.malformed_yaml_skill_zip(),
                 "malformed-single-quote": self.malformed_single_quote_skill_zip(),
+                "compatibility-sequence": self.compatibility_sequence_skill_zip(),
+                "invalid-block-indent": self.invalid_block_indent_skill_zip(),
                 "mismatched": self.mismatched_skill_zip(),
             }[kind]
             slug = {
@@ -225,6 +253,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 "invalid": "invalid-skill",
                 "malformed-yaml": "malformed-yaml",
                 "malformed-single-quote": "malformed-single-quote",
+                "compatibility-sequence": "compatibility-sequence",
+                "invalid-block-indent": "invalid-block-indent",
                 "mismatched": "planned-skill",
             }[kind]
             entry.update(
@@ -304,6 +334,12 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
         if self.path == "/archives/malformed-single-quote.zip":
             self.send_bytes(self.malformed_single_quote_skill_zip(), "application/zip")
             return
+        if self.path == "/archives/compatibility-sequence.zip":
+            self.send_bytes(self.compatibility_sequence_skill_zip(), "application/zip")
+            return
+        if self.path == "/archives/invalid-block-indent.zip":
+            self.send_bytes(self.invalid_block_indent_skill_zip(), "application/zip")
+            return
         if self.path == "/archives/mismatched.zip":
             self.send_bytes(self.mismatched_skill_zip(), "application/zip")
             return
@@ -330,6 +366,10 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                 kind = "malformed-yaml"
             elif "malformed-single-quote" in filter_value:
                 kind = "malformed-single-quote"
+            elif "compatibility-sequence" in filter_value:
+                kind = "compatibility-sequence"
+            elif "invalid-block-indent" in filter_value:
+                kind = "invalid-block-indent"
             elif "planned-skill" in filter_value:
                 kind = "mismatched"
             elif "source-skill" in filter_value:
@@ -933,6 +973,59 @@ class CapelryScriptTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "cannot continue a non-block scalar"):
                 bootstrap.validate_skill_directory(skill_dir, "continuation-skill")
 
+    def test_optional_portable_fields_must_be_string_scalars(self) -> None:
+        capelry = load_module("capelry_optional_scalar_validation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_optional_scalar_validation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "optional-scalar-skill"
+            skill_dir.mkdir()
+            for field in ("license", "compatibility", "allowed-tools"):
+                (skill_dir / "SKILL.md").write_text(
+                    "---\nname: optional-scalar-skill\n"
+                    "description: Fixture. Use for optional scalar validation.\n"
+                    f"{field}:\n  - invalid-sequence-value\n"
+                    "---\n\n# Instructions\n",
+                    encoding="utf-8",
+                )
+                report = capelry.validate_skill_directory(skill_dir)
+                self.assertFalse(report["valid"], field)
+                self.assertIn(
+                    f"frontmatter field '{field}' must be a string, not a sequence or mapping",
+                    report["errors"],
+                )
+                with self.assertRaisesRegex(SystemExit, f"field '{field}' must be a string"):
+                    bootstrap.validate_skill_directory(skill_dir, "optional-scalar-skill")
+
+    def test_skill_validators_reject_invalid_block_scalar_indentation(self) -> None:
+        capelry = load_module("capelry_block_indent_validation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_block_indent_validation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "block-indent-skill"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text(
+                "---\nname: block-indent-skill\ndescription: |\n  first line\n    deeper line\n"
+                "---\n\n# Instructions\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
+            self.assertEqual(
+                bootstrap.validate_skill_directory(skill_dir, "block-indent-skill")["name"],
+                "block-indent-skill",
+            )
+
+            for invalid_content in ("  good\n bad", "  good\n\tbad"):
+                skill_file.write_text(
+                    "---\nname: block-indent-skill\ndescription: |\n"
+                    f"{invalid_content}\n---\n\n# Instructions\n",
+                    encoding="utf-8",
+                )
+                report = capelry.validate_skill_directory(skill_dir)
+                self.assertFalse(report["valid"], invalid_content)
+                self.assertIn("block scalar field 'description'", " ".join(report["errors"]))
+                with self.assertRaisesRegex(SystemExit, "block scalar field 'description'"):
+                    bootstrap.validate_skill_directory(skill_dir, "block-indent-skill")
+
     def test_skill_validators_require_escaped_yaml_single_quotes(self) -> None:
         capelry = load_module("capelry_single_quote_validation", CAPELRY_SCRIPT)
         bootstrap = load_module("bootstrap_single_quote_validation", BOOTSTRAP_SCRIPT)
@@ -1233,6 +1326,45 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertIn("unescaped apostrophe", result.stderr)
             self.assertEqual(marker.read_text(encoding="utf-8"), "original")
             self.assertIn("Existing valid skill", (dest / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_schema_invalid_skills_cannot_replace_existing_installs(self) -> None:
+        with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
+            for ref, expected_error in (
+                ("compatibility-sequence", "must be a string, not a sequence or mapping"),
+                ("invalid-block-indent", "block scalar field 'description'"),
+            ):
+                dest = Path(tmpdir) / ref
+                dest.mkdir()
+                (dest / "SKILL.md").write_text(
+                    RegistryFixtureHandler.skill_md(
+                        ref,
+                        "Existing valid skill. Use for schema rollback testing.",
+                    ),
+                    encoding="utf-8",
+                )
+                marker = dest / "preserve-me.txt"
+                marker.write_text("original", encoding="utf-8")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CAPELRY_SCRIPT),
+                        "--registry",
+                        fixture.url,
+                        "install",
+                        f"capelry-ai/capelry-skills/{ref}",
+                        "--dest",
+                        str(dest),
+                        "--force",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    env=clean_env(),
+                )
+
+                self.assertNotEqual(result.returncode, 0, ref)
+                self.assertIn(expected_error, result.stderr)
+                self.assertEqual(marker.read_text(encoding="utf-8"), "original")
+                self.assertIn("Existing valid skill", (dest / "SKILL.md").read_text(encoding="utf-8"))
 
     def test_catalog_install_name_cannot_redirect_to_declared_skill_name(self) -> None:
         with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
@@ -1557,6 +1689,32 @@ class CapelryScriptTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(SystemExit, "YAML string"):
                 bootstrap.validate_skill_directory(skill_dir, "123")
+
+    def test_bootstrap_rejects_duplicate_frontmatter_before_replacement(self) -> None:
+        bootstrap = load_module("capelry_bootstrap_duplicate_validation", BOOTSTRAP_SCRIPT)
+        duplicate_skill = (
+            "---\nname: capelry\nname: wrong\n"
+            "description: Fixture. Use for duplicate-field validation.\n"
+            "---\n\n# Instructions\n"
+        )
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("repo-main/skills/capelry/SKILL.md", duplicate_skill)
+        archive.seek(0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "capelry"
+            dest.mkdir()
+            marker = dest / "preserve-me.txt"
+            marker.write_text("original", encoding="utf-8")
+            (dest / "SKILL.md").write_text(RegistryFixtureHandler.skill_md("capelry"), encoding="utf-8")
+            with zipfile.ZipFile(archive) as zf:
+                source_path, rel_members = bootstrap.find_skill_source(zf, ("skills/capelry",))
+                with self.assertRaisesRegex(SystemExit, "field 'name' is declared more than once"):
+                    bootstrap.install_source_path(zf, rel_members, source_path, dest, replace=True)
+
+            self.assertEqual(marker.read_text(encoding="utf-8"), "original")
+            self.assertIn("Fixture instructions for capelry", (dest / "SKILL.md").read_text(encoding="utf-8"))
 
     def test_bootstrap_validation_preserves_existing_destination_on_failure(self) -> None:
         bootstrap = load_module("capelry_bootstrap_atomic", BOOTSTRAP_SCRIPT)

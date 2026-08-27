@@ -233,6 +233,51 @@ def yaml_scalar(value: str) -> str:
     return value.strip()
 
 
+def validate_frontmatter_structure(lines: list[str]) -> None:
+    field_pattern = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?:\s*(?P<value>.*))?$")
+    seen: set[str] = set()
+    current_key: str | None = None
+    current_value = ""
+    block_indent: int | None = None
+    for line_number, line in enumerate(lines, start=2):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith((" ", "\t")):
+            if current_key is None:
+                raise SystemExit(f"Installed SKILL.md frontmatter line {line_number} is indented without a field")
+            if current_value and not re.fullmatch(r"[>|][+-]?", current_value):
+                raise SystemExit(
+                    f"Installed SKILL.md field '{current_key}' cannot continue a non-block scalar; "
+                    "use | or > for multiline values"
+                )
+            if re.fullmatch(r"[>|][+-]?", current_value):
+                prefix = line[: len(line) - len(line.lstrip(" \t"))]
+                if "\t" in prefix:
+                    raise SystemExit(
+                        f"Installed SKILL.md block scalar field '{current_key}' must use spaces, not tabs, "
+                        "for indentation"
+                    )
+                indent = len(prefix)
+                if block_indent is None:
+                    block_indent = indent
+                elif indent < block_indent:
+                    raise SystemExit(
+                        f"Installed SKILL.md block scalar field '{current_key}' must use at least "
+                        f"{block_indent} spaces established by its first content line"
+                    )
+            continue
+        match = field_pattern.match(line)
+        if not match:
+            raise SystemExit(f"Installed SKILL.md frontmatter line {line_number} is not a top-level YAML field")
+        key = match.group("key")
+        if key in seen:
+            raise SystemExit(f"Installed SKILL.md frontmatter field '{key}' is declared more than once")
+        seen.add(key)
+        current_key = key
+        current_value = (match.group("value") or "").strip()
+        block_indent = None
+
+
 def frontmatter_scalar(lines: list[str], key: str) -> str | None:
     pattern = re.compile(rf"^{re.escape(key)}:\s*(?P<value>.*)$")
     for index, line in enumerate(lines):
@@ -270,6 +315,8 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
             return yaml_scalar(value)
         if not continuation:
             return ""
+        if not value and any(line.startswith("- ") or re.match(r"^[^:#]+:\s", line) for line in continuation):
+            raise SystemExit(f"Installed SKILL.md field '{key}' must be a string, not a sequence or mapping")
         return ("\n" if value.startswith("|") else " ").join(continuation).strip()
     return None
 
@@ -288,14 +335,20 @@ def validate_skill_directory(skill_dir: Path, expected_name: str) -> dict[str, s
     except StopIteration as error:
         raise SystemExit("Installed SKILL.md frontmatter is missing its closing --- delimiter") from error
     frontmatter = lines[1:closing]
+    validate_frontmatter_structure(frontmatter)
     name = frontmatter_scalar(frontmatter, "name")
     description = frontmatter_scalar(frontmatter, "description")
+    frontmatter_scalar(frontmatter, "license")
+    compatibility = frontmatter_scalar(frontmatter, "compatibility")
+    frontmatter_scalar(frontmatter, "allowed-tools")
     if not name or len(name) > 64 or not SKILL_NAME_PATTERN.fullmatch(name):
         raise SystemExit("Installed SKILL.md name must be 1-64 lowercase letters, numbers, or single hyphens")
     if name != expected_name:
         raise SystemExit(f"Installed SKILL.md name '{name}' must match destination directory '{expected_name}'")
     if not description or len(description) > 1024:
         raise SystemExit("Installed SKILL.md description must contain 1-1024 characters")
+    if compatibility is not None and (not compatibility or len(compatibility) > 500):
+        raise SystemExit("Installed SKILL.md compatibility must contain 1-500 characters when provided")
     return {"name": name, "descriptionLength": len(description)}
 
 
