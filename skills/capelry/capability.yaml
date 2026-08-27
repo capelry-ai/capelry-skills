@@ -3,46 +3,99 @@ kind: Capability
 metadata:
   namespace: capelry
   name: capelry
-  version: 2.0.9
+  version: 2.1.0
   title: Capelry
 spec:
   type: skill
-  summary: Always-available bootstrap skill for catalog-aware search, explore, inspect, install, packaging, and self-updating Capelry capabilities.
-  description: Always-available Agent Skill integration for Capelry, the AI Agent Capability Registry. Use it to bootstrap Capelry support into fresh projects, discover catalog-aware ARD resources, explore facets, install skills into project-local or global skill directories, and keep the Capelry skill current from GitHub vX.X.X releases.
+  summary: Harness-aware Capelry skill for catalog discovery, validated installation, packaging, and self-update.
+  description: Portable Agent Skill integration for Capelry, the AI Agent Capability Registry. It discovers catalog-aware ARD resources, selects verified project or global paths for major coding harnesses, validates Agent Skills frontmatter before transactional installation, and keeps the Capelry skill current from GitHub releases.
   docs:
     readme: SKILL.md
     additional:
       - BOOTSTRAP.md
+      - references/harnesses.md
       - ai-catalog.json
   compatibility:
-    - target: pi
+    - target: agents-skills
       versionRange: "*"
-      notes: Install into .pi/skills for project-local use or ~/.pi/agent/skills for global use. Pi can also discover .agents/skills in projects.
+      notes: Cross-client project and user convention used by Codex, Pi, OpenCode, Gemini CLI, Cursor, Copilot, Roo Code, Junie, Factory, and OpenHands.
       metadata:
-        installPath: .pi/skills/capelry
+        installPath: .agents/skills/capelry
     - target: claude-code
       versionRange: "*"
-      notes: Install into .claude/skills for project-local use or ~/.claude/skills for global use.
+      notes: Use .claude/skills/capelry for project scope or ~/.claude/skills/capelry for personal scope. Claude Code does not document .agents/skills discovery.
       metadata:
         installPath: .claude/skills/capelry
     - target: codex-cli
       versionRange: "*"
-      notes: Install into a Codex-readable skills directory such as ~/.codex/skills, or configure the agent to read .agents/skills.
+      notes: Codex documents .agents/skills for repository and user scopes; .codex/skills is not a Codex discovery root.
       metadata:
         installPath: .agents/skills/capelry
-    - target: agents-skills
+    - target: pi
       versionRange: "*"
-      notes: Portable Agent Skills layout. Install into .agents/skills/capelry for project-local use.
+      notes: Use .pi/skills/capelry or ~/.pi/agent/skills/capelry; Pi also discovers .agents/skills.
       metadata:
-        installPath: .agents/skills/capelry
+        installPath: .pi/skills/capelry
+    - target: opencode
+      versionRange: "*"
+      notes: Use .opencode/skills/capelry or ~/.config/opencode/skills/capelry; OpenCode also discovers .agents and .claude skill roots.
+      metadata:
+        installPath: .opencode/skills/capelry
+    - target: gemini-cli
+      versionRange: "*"
+      notes: Use .gemini/skills/capelry or ~/.gemini/skills/capelry; Gemini CLI also discovers .agents/skills.
+      metadata:
+        installPath: .gemini/skills/capelry
     - target: cursor
       versionRange: "*"
-      notes: Use as a Skill-like project instruction by pointing Cursor or its agent configuration at this SKILL.md.
+      notes: Use .cursor/skills/capelry or ~/.cursor/skills/capelry; Cursor also discovers .agents, .claude, and .codex compatibility roots.
+      metadata:
+        installPath: .cursor/skills/capelry
     - target: windsurf
       versionRange: "*"
-      notes: Use as a Skill-like project instruction by pointing Windsurf or its agent configuration at this SKILL.md.
+      notes: Use .windsurf/skills/capelry or ~/.codeium/windsurf/skills/capelry for predictable Cascade discovery.
+      metadata:
+        installPath: .windsurf/skills/capelry
+    - target: github-copilot
+      versionRange: "*"
+      notes: Use .github/skills/capelry for repository scope or ~/.copilot/skills/capelry for personal scope; .agents/skills is also supported.
+      metadata:
+        installPath: .github/skills/capelry
+    - target: cline
+      versionRange: "*"
+      notes: Use .cline/skills/capelry or ~/.cline/skills/capelry. Cline does not document .agents/skills discovery.
+      metadata:
+        installPath: .cline/skills/capelry
+    - target: roo-code
+      versionRange: "*"
+      notes: Use .roo/skills/capelry or ~/.roo/skills/capelry; Roo Code also discovers .agents/skills.
+      metadata:
+        installPath: .roo/skills/capelry
+    - target: junie
+      versionRange: "*"
+      notes: Use .junie/skills/capelry or ~/.junie/skills/capelry; Junie also discovers .agents/skills.
+      metadata:
+        installPath: .junie/skills/capelry
+    - target: kiro
+      versionRange: "*"
+      notes: Use .kiro/skills/capelry or ~/.kiro/skills/capelry. Custom agents must include the skill through a skill:// resource.
+      metadata:
+        installPath: .kiro/skills/capelry
+    - target: factory
+      versionRange: "*"
+      notes: Use .factory/skills/capelry or ~/.factory/skills/capelry; Factory also discovers .agents/skills.
+      metadata:
+        installPath: .factory/skills/capelry
+    - target: openhands
+      versionRange: "*"
+      notes: Use the modern .agents/skills/capelry project or user path.
+      metadata:
+        installPath: .agents/skills/capelry
   assets:
     - path: BOOTSTRAP.md
+      mediaType: text/markdown
+      required: true
+    - path: references/harnesses.md
       mediaType: text/markdown
       required: true
     - path: ai-catalog.json
@@ -58,24 +111,51 @@ spec:
       mediaType: text/x-python
       required: true
   install:
-    - target: pi
-      path: .pi/skills/capelry
-      notes: Project-local Pi install. Use ~/.pi/agent/skills/capelry for global installs.
-      commands:
-        - mkdir -p .pi/skills/capelry
-        - unzip -oq capelry-2.0.9.zip -d .pi/skills/capelry
-    - target: claude-code
-      path: .claude/skills/capelry
-      notes: Project-local Claude Code install. Use ~/.claude/skills/capelry for global installs.
-      commands:
-        - mkdir -p .claude/skills/capelry
-        - unzip -oq capelry-2.0.9.zip -d .claude/skills/capelry
-    - target: codex-cli
+    - target: agents-project
       path: .agents/skills/capelry
-      notes: Portable project-local install for Codex-style Skill consumers.
+      notes: Portable project target for harnesses that document .agents/skills discovery.
       commands:
         - mkdir -p .agents/skills/capelry
-        - unzip -oq capelry-2.0.9.zip -d .agents/skills/capelry
+        - unzip -oq capelry-2.1.0.zip -d .agents/skills/capelry
+    - target: claude-project
+      path: .claude/skills/capelry
+      notes: Project-local Claude Code install.
+    - target: codex-project
+      path: .agents/skills/capelry
+      notes: Project-local Codex install at its documented repository path.
+    - target: pi-project
+      path: .pi/skills/capelry
+      notes: Project-local Pi install.
+    - target: opencode-project
+      path: .opencode/skills/capelry
+      notes: Project-local OpenCode install.
+    - target: gemini-project
+      path: .gemini/skills/capelry
+      notes: Workspace Gemini CLI install.
+    - target: cursor-project
+      path: .cursor/skills/capelry
+      notes: Project-local Cursor install.
+    - target: windsurf-project
+      path: .windsurf/skills/capelry
+      notes: Workspace Windsurf Cascade install.
+    - target: copilot-project
+      path: .github/skills/capelry
+      notes: Repository GitHub Copilot and VS Code install.
+    - target: cline-project
+      path: .cline/skills/capelry
+      notes: Workspace Cline install.
+    - target: roo-project
+      path: .roo/skills/capelry
+      notes: Project Roo Code install.
+    - target: junie-project
+      path: .junie/skills/capelry
+      notes: Project JetBrains Junie install.
+    - target: kiro-project
+      path: .kiro/skills/capelry
+      notes: Workspace Kiro install.
+    - target: factory-project
+      path: .factory/skills/capelry
+      notes: Project Factory Droid install.
   source:
     repository: https://github.com/capelry-ai/capelry-skills
     path: skills/capelry
@@ -84,4 +164,4 @@ spec:
     permissions:
       - network:read
       - filesystem:write
-    sandbox: User-writable skill directories only; inspect third-party skills before running bundled scripts.
+    sandbox: User-writable skill directories only; inspect third-party instructions and scripts before activation.

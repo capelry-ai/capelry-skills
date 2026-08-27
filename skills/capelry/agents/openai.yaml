@@ -1,5 +1,5 @@
 interface:
   display_name: "Capelry"
-  short_description: "Find and install cataloged agent skills"
+  short_description: "Find, validate, and install cataloged agent skills"
   brand_color: "#5B7CFA"
-  default_prompt: "Use $capelry to search Capelry for a cataloged skill that solves my task and install the best match into this project."
+  default_prompt: "Use $capelry to find a skill for my task, inspect it, identify this harness's verified project target, validate the package, install it, and confirm the harness can see it."

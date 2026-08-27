@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
@@ -36,14 +37,59 @@ DEFAULT_HTTP_USER_AGENT = "capelry-client bootstrap"
 
 TARGET_SKILLS_DIRS = {
     "agents-project": ".agents/skills",
-    "pi-project": ".pi/skills",
-    "claude-project": ".claude/skills",
-    "codex-project": ".codex/skills",
     "agents-global": "~/.agents/skills",
+    "pi-project": ".pi/skills",
     "pi-global": "~/.pi/agent/skills",
+    "claude-project": ".claude/skills",
     "claude-global": "~/.claude/skills",
-    "codex-global": "~/.codex/skills",
+    "codex-project": ".agents/skills",
+    "codex-global": "~/.agents/skills",
+    "opencode-project": ".opencode/skills",
+    "opencode-global": "~/.config/opencode/skills",
+    "gemini-project": ".gemini/skills",
+    "gemini-global": "~/.gemini/skills",
+    "cursor-project": ".cursor/skills",
+    "cursor-global": "~/.cursor/skills",
+    "windsurf-project": ".windsurf/skills",
+    "windsurf-global": "~/.codeium/windsurf/skills",
+    "copilot-project": ".github/skills",
+    "copilot-global": "~/.copilot/skills",
+    "cline-project": ".cline/skills",
+    "cline-global": "~/.cline/skills",
+    "roo-project": ".roo/skills",
+    "roo-global": "~/.roo/skills",
+    "junie-project": ".junie/skills",
+    "junie-global": "~/.junie/skills",
+    "kiro-project": ".kiro/skills",
+    "kiro-global": "~/.kiro/skills",
+    "factory-project": ".factory/skills",
+    "factory-global": "~/.factory/skills",
 }
+
+TARGET_NEXT_STEPS = {
+    "agents": "Reload or restart the active harness, then confirm {name} appears in its skills list.",
+    "pi": "In Pi, run /reload and then /skill:{name}.",
+    "claude": "In Claude Code, invoke /{name}; restart only if the skills directory was created after startup.",
+    "codex": "Codex detects skill changes automatically; use /skills or ${name}, and restart only if it is absent.",
+    "opencode": "Restart OpenCode if needed, then confirm its skill tool lists {name} and permissions allow it.",
+    "gemini": "In Gemini CLI, run /skills reload and then /skills list; activation asks for consent.",
+    "cursor": "In Cursor, open Customize > Skills or invoke /{name} in Agent chat.",
+    "windsurf": "In Cascade, invoke @{name}; reopen Cascade if the skill is not listed.",
+    "copilot": "In Copilot CLI, run /skills reload and /skills info {name}.",
+    "cline": "In Cline, confirm {name} is enabled in the Skills menu or invoke /{name}.",
+    "roo": "Roo watches SKILL.md changes; confirm {name} is available in the current mode.",
+    "junie": "In Junie, invoke /{name} or ${name}; restart the session if it is not suggested.",
+    "kiro": "Restart the Kiro agent if needed and invoke /{name}; custom agents must include the skill:// resource.",
+    "factory": "Start a new Droid session if needed, then invoke /{name}.",
+}
+
+SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+YAML_NON_STRING_PLAIN_PATTERN = re.compile(
+    r"^[+-]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9_]+)?|"
+    r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.(?:inf|nan)|"
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?)$",
+    re.IGNORECASE,
+)
 
 
 def eprint(*parts: object) -> None:
@@ -101,19 +147,30 @@ def candidate_source_paths(source_path: str | None) -> tuple[str, ...]:
     return DEFAULT_SOURCE_PATHS
 
 
+def normalized_archive_path(filename: str) -> PurePosixPath:
+    normalized = filename.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if (
+        "\x00" in normalized
+        or path.is_absolute()
+        or ".." in path.parts
+        or (path.parts and path.parts[0].endswith(":"))
+    ):
+        raise SystemExit(f"Unsafe archive path: {filename}")
+    return path
+
+
 def safe_file_members(zf: zipfile.ZipFile) -> Iterable[zipfile.ZipInfo]:
     for member in zf.infolist():
         if member.is_dir():
             continue
-        path = PurePosixPath(member.filename)
-        if path.is_absolute() or ".." in path.parts:
-            raise SystemExit(f"Unsafe archive path: {member.filename}")
+        normalized_archive_path(member.filename)
         yield member
 
 
 def archive_member_rel(member: zipfile.ZipInfo) -> str:
     """Return a member path relative to the GitHub archive root directory."""
-    parts = PurePosixPath(member.filename).parts
+    parts = normalized_archive_path(member.filename).parts
     if len(parts) <= 1:
         return ""
     return PurePosixPath(*parts[1:]).as_posix()
@@ -153,12 +210,109 @@ def find_skill_source(
     raise SystemExit(f"Could not find the Capelry skill in the GitHub archive. Tried: {expected}. Found: {found}")
 
 
-def prepare_dest(dest: Path, replace: bool) -> None:
-    if dest.exists():
-        if not replace:
-            raise SystemExit(f"Destination already exists: {dest}")
-        shutil.rmtree(dest)
-    dest.mkdir(parents=True, exist_ok=True)
+def path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def yaml_scalar(value: str) -> str:
+    value = value.strip()
+    quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+    if not quoted and " #" in value:
+        value = value.split(" #", 1)[0].rstrip()
+    if quoted:
+        value = value[1:-1]
+    return value.strip()
+
+
+def frontmatter_scalar(lines: list[str], key: str) -> str | None:
+    pattern = re.compile(rf"^{re.escape(key)}:\s*(?P<value>.*)$")
+    for index, line in enumerate(lines):
+        match = pattern.match(line)
+        if not match:
+            continue
+        value = match.group("value").strip()
+        if value and not re.fullmatch(r"[>|][+-]?", value):
+            quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+            if (value.startswith(("'", '"')) or value.endswith(("'", '"'))) and not quoted:
+                raise SystemExit(f"Installed SKILL.md field '{key}' must be a valid YAML string")
+            if not quoted and (
+                value.startswith(("[", "{"))
+                or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
+                or YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value)
+                or re.search(r":\s", value)
+            ):
+                raise SystemExit(f"Installed SKILL.md field '{key}' must be a YAML string")
+            return yaml_scalar(value)
+        continuation: list[str] = []
+        for following in lines[index + 1 :]:
+            if following and not following.startswith((" ", "\t")):
+                break
+            if following.strip():
+                continuation.append(following.strip())
+        if not continuation:
+            return ""
+        return ("\n" if value.startswith("|") else " ").join(continuation).strip()
+    return None
+
+
+def validate_skill_directory(skill_dir: Path, expected_name: str) -> dict[str, str | int]:
+    skill_file = skill_dir / "SKILL.md"
+    try:
+        text = skill_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise SystemExit(f"Installed skill has no readable UTF-8 SKILL.md: {error}") from error
+    lines = text.lstrip("\ufeff").splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise SystemExit("Installed SKILL.md must start with YAML frontmatter delimited by ---")
+    try:
+        closing = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+    except StopIteration as error:
+        raise SystemExit("Installed SKILL.md frontmatter is missing its closing --- delimiter") from error
+    frontmatter = lines[1:closing]
+    name = frontmatter_scalar(frontmatter, "name")
+    description = frontmatter_scalar(frontmatter, "description")
+    if not name or len(name) > 64 or not SKILL_NAME_PATTERN.fullmatch(name):
+        raise SystemExit("Installed SKILL.md name must be 1-64 lowercase letters, numbers, or single hyphens")
+    if name != expected_name:
+        raise SystemExit(f"Installed SKILL.md name '{name}' must match destination directory '{expected_name}'")
+    if not description or len(description) > 1024:
+        raise SystemExit("Installed SKILL.md description must contain 1-1024 characters")
+    return {"name": name, "descriptionLength": len(description)}
+
+
+def replace_directory(dest: Path, candidate: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    old_parent = Path(tempfile.mkdtemp(prefix=f".{dest.name}.old-", dir=str(dest.parent)))
+    old = old_parent / dest.name
+    had_old = path_exists(dest)
+    preserve_old_temp = False
+    if had_old:
+        shutil.move(str(dest), str(old))
+    try:
+        shutil.move(str(candidate), str(dest))
+    except BaseException:
+        try:
+            if path_exists(dest):
+                remove_path(dest)
+            if had_old and path_exists(old):
+                shutil.move(str(old), str(dest))
+        except BaseException as rollback_error:
+            preserve_old_temp = path_exists(old)
+            location = str(old) if preserve_old_temp else "unavailable"
+            raise RuntimeError(
+                f"Bootstrap replacement and rollback both failed; the previous install is preserved at {location}"
+            ) from rollback_error
+        raise
+    finally:
+        if not preserve_old_temp:
+            shutil.rmtree(old_parent, ignore_errors=True)
 
 
 def install_source_path(
@@ -167,22 +321,27 @@ def install_source_path(
     source_path: str,
     dest: Path,
     replace: bool,
-) -> None:
-    prepare_dest(dest, replace)
-    prefix = f"{source_path}/"
-    for rel, member in rel_members.items():
-        if not rel.startswith(prefix):
-            continue
-        output_rel = rel[len(prefix) :]
-        if not output_rel:
-            continue
-        output = dest / output_rel
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(zf.read(member))
+) -> dict[str, str | int]:
+    if path_exists(dest) and not replace:
+        raise SystemExit(f"Destination already exists: {dest}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{dest.name}.install-", dir=str(dest.parent)) as temp_root:
+        candidate = Path(temp_root) / dest.name
+        candidate.mkdir()
+        prefix = f"{source_path}/"
+        for rel, member in rel_members.items():
+            if not rel.startswith(prefix):
+                continue
+            output_rel = rel[len(prefix) :]
+            if not output_rel:
+                continue
+            output = candidate / output_rel
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(zf.read(member))
 
-    if not (dest / "SKILL.md").exists():
-        shutil.rmtree(dest, ignore_errors=True)
-        raise SystemExit("Bootstrap completed but did not produce SKILL.md")
+        validation = validate_skill_directory(candidate, dest.name)
+        replace_directory(dest, candidate)
+        return validation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -218,7 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--name",
         default=os.environ.get("CAPELRY_BOOTSTRAP_NAME", DEFAULT_SKILL_NAME),
-        help=f"Install directory name under --skills-dir (default: {DEFAULT_SKILL_NAME})",
+        help=f"Install directory name under --skills-dir; must match SKILL.md (default: {DEFAULT_SKILL_NAME})",
     )
     parser.add_argument("--dest", help="Exact destination directory; overrides --skills-dir/name")
     parser.add_argument(
@@ -245,6 +404,8 @@ def main() -> int:
         raise SystemExit(f"Unknown CAPELRY_BOOTSTRAP_TARGET: {args.target}. Expected one of: {choices}")
     skills_dir = TARGET_SKILLS_DIRS[args.target] if args.target else args.skills_dir
     dest = Path(args.dest).expanduser() if args.dest else Path(skills_dir).expanduser() / args.name
+    if dest.name != DEFAULT_SKILL_NAME:
+        raise SystemExit("Capelry must be installed in a directory named 'capelry' for cross-harness compatibility")
 
     archive_url = github_archive_url(repository, ref)
     print(f"Fetching Capelry skill source from {repository}@{ref}...")
@@ -252,10 +413,13 @@ def main() -> int:
 
     with zipfile.ZipFile(io.BytesIO(archive)) as zf:
         source_path, rel_members = find_skill_source(zf, source_candidates)
-        install_source_path(zf, rel_members, source_path, dest, replace=not args.no_replace)
+        validation = install_source_path(zf, rel_members, source_path, dest, replace=not args.no_replace)
 
     print(f"Installed Capelry skill from {repository}@{ref}:{source_path} to {dest}")
-    print("Next: reload or restart your agent. In Pi, run /reload then /skill:capelry.")
+    print(f"Validated Agent Skills metadata: {validation['name']} ({validation['descriptionLength']} description characters)")
+    target_family = args.target.split("-", 1)[0] if args.target else "agents"
+    next_step = TARGET_NEXT_STEPS.get(target_family, TARGET_NEXT_STEPS["agents"]).format(name=validation["name"])
+    print(f"Next: {next_step}")
     print(f"Try: python3 {dest / 'scripts' / 'capelry.py'} search skill")
     return 0
 

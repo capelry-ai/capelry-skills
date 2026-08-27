@@ -21,7 +21,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-CAPELRY_SKILL_VERSION = "2.0.9"
+CAPELRY_SKILL_VERSION = "2.1.0"
 DEFAULT_REGISTRY = "https://capelry.com"
 SELF_GITHUB_REPOSITORY = "capelry-ai/capelry-skills"
 SELF_SOURCE_PATH = "skills/capelry"
@@ -54,15 +54,194 @@ ARD_SOURCE_REPOSITORY_FULL_NAME_METADATA = "com.capelry.sourceRepositoryFullName
 DEFAULT_HTTP_USER_AGENT = "capelry-client"
 HTTP_USER_AGENT = DEFAULT_HTTP_USER_AGENT
 
-TARGET_ROOTS = {
-    "agents-project": ".agents/skills",
-    "pi-project": ".pi/skills",
-    "claude-project": ".claude/skills",
-    "codex-project": ".codex/skills",
-    "agents-global": "~/.agents/skills",
-    "pi-global": "~/.pi/agent/skills",
-    "claude-global": "~/.claude/skills",
-    "codex-global": "~/.codex/skills",
+TARGETS: dict[str, dict[str, str]] = {
+    "agents-project": {
+        "root": ".agents/skills",
+        "harness": "Portable Agent Skills",
+        "aliases": "codex pi opencode gemini cursor copilot vscode roo junie factory openhands",
+        "scope": "project",
+        "next": "Reload or restart the active harness, then confirm {name} appears in its skills list.",
+    },
+    "agents-global": {
+        "root": "~/.agents/skills",
+        "harness": "Portable Agent Skills",
+        "aliases": "codex pi opencode gemini cursor copilot vscode roo junie factory openhands",
+        "scope": "global",
+        "next": "Reload or restart the active harness, then confirm {name} appears in its skills list.",
+    },
+    "pi-project": {
+        "root": ".pi/skills",
+        "harness": "Pi",
+        "scope": "project",
+        "next": "In Pi, run /reload and then /skill:{name}.",
+    },
+    "pi-global": {
+        "root": "~/.pi/agent/skills",
+        "harness": "Pi",
+        "scope": "global",
+        "next": "In Pi, run /reload and then /skill:{name}.",
+    },
+    "claude-project": {
+        "root": ".claude/skills",
+        "harness": "Claude Code",
+        "scope": "project",
+        "next": "In Claude Code, invoke /{name}; restart only if the .claude/skills directory was created after startup.",
+    },
+    "claude-global": {
+        "root": "~/.claude/skills",
+        "harness": "Claude Code",
+        "scope": "global",
+        "next": "In Claude Code, invoke /{name}; restart only if the ~/.claude/skills directory was created after startup.",
+    },
+    "codex-project": {
+        "root": ".agents/skills",
+        "harness": "OpenAI Codex",
+        "scope": "project",
+        "next": "Codex detects skill changes automatically; use /skills or ${name}, and restart Codex only if it is absent.",
+    },
+    "codex-global": {
+        "root": "~/.agents/skills",
+        "harness": "OpenAI Codex",
+        "scope": "global",
+        "next": "Codex detects skill changes automatically; use /skills or ${name}, and restart Codex only if it is absent.",
+    },
+    "opencode-project": {
+        "root": ".opencode/skills",
+        "harness": "OpenCode",
+        "scope": "project",
+        "next": "Restart OpenCode if needed, then confirm its skill tool lists {name} and permissions allow it.",
+    },
+    "opencode-global": {
+        "root": "~/.config/opencode/skills",
+        "harness": "OpenCode",
+        "scope": "global",
+        "next": "Restart OpenCode if needed, then confirm its skill tool lists {name} and permissions allow it.",
+    },
+    "gemini-project": {
+        "root": ".gemini/skills",
+        "harness": "Gemini CLI",
+        "scope": "project",
+        "next": "In Gemini CLI, run /skills reload and then /skills list; activation asks for consent.",
+    },
+    "gemini-global": {
+        "root": "~/.gemini/skills",
+        "harness": "Gemini CLI",
+        "scope": "global",
+        "next": "In Gemini CLI, run /skills reload and then /skills list; activation asks for consent.",
+    },
+    "cursor-project": {
+        "root": ".cursor/skills",
+        "harness": "Cursor",
+        "scope": "project",
+        "next": "In Cursor, open Customize > Skills or invoke /{name} in Agent chat.",
+    },
+    "cursor-global": {
+        "root": "~/.cursor/skills",
+        "harness": "Cursor",
+        "scope": "global",
+        "next": "In Cursor, open Customize > Skills or invoke /{name} in Agent chat.",
+    },
+    "windsurf-project": {
+        "root": ".windsurf/skills",
+        "harness": "Windsurf Cascade",
+        "scope": "project",
+        "next": "In Cascade, invoke @{name}; reopen Cascade if the skill is not listed.",
+    },
+    "windsurf-global": {
+        "root": "~/.codeium/windsurf/skills",
+        "harness": "Windsurf Cascade",
+        "scope": "global",
+        "next": "In Cascade, invoke @{name}; reopen Cascade if the skill is not listed.",
+    },
+    "copilot-project": {
+        "root": ".github/skills",
+        "harness": "GitHub Copilot and VS Code",
+        "scope": "project",
+        "next": "In Copilot CLI, run /skills reload and /skills info {name}; repository skills also load in supported Copilot agents.",
+    },
+    "copilot-global": {
+        "root": "~/.copilot/skills",
+        "harness": "GitHub Copilot and VS Code",
+        "scope": "global",
+        "next": "In Copilot CLI, run /skills reload and /skills info {name}.",
+    },
+    "cline-project": {
+        "root": ".cline/skills",
+        "harness": "Cline",
+        "scope": "project",
+        "next": "In Cline, confirm {name} is enabled in the Skills menu or invoke /{name}.",
+    },
+    "cline-global": {
+        "root": "~/.cline/skills",
+        "harness": "Cline",
+        "scope": "global",
+        "next": "In Cline, confirm {name} is enabled in the Skills menu or invoke /{name}.",
+    },
+    "roo-project": {
+        "root": ".roo/skills",
+        "harness": "Roo Code",
+        "scope": "project",
+        "next": "Roo watches SKILL.md changes; confirm {name} is available in the current mode.",
+    },
+    "roo-global": {
+        "root": "~/.roo/skills",
+        "harness": "Roo Code",
+        "scope": "global",
+        "next": "Roo watches SKILL.md changes; confirm {name} is available in the current mode.",
+    },
+    "junie-project": {
+        "root": ".junie/skills",
+        "harness": "JetBrains Junie",
+        "scope": "project",
+        "next": "In Junie, invoke /{name} or ${name}; restart the session if it is not suggested.",
+    },
+    "junie-global": {
+        "root": "~/.junie/skills",
+        "harness": "JetBrains Junie",
+        "scope": "global",
+        "next": "In Junie, invoke /{name} or ${name}; restart the session if it is not suggested.",
+    },
+    "kiro-project": {
+        "root": ".kiro/skills",
+        "harness": "Kiro",
+        "scope": "project",
+        "next": "Restart the Kiro agent if needed and invoke /{name}; custom agents must include the skill:// resource.",
+    },
+    "kiro-global": {
+        "root": "~/.kiro/skills",
+        "harness": "Kiro",
+        "scope": "global",
+        "next": "Restart the Kiro agent if needed and invoke /{name}; custom agents must include the skill:// resource.",
+    },
+    "factory-project": {
+        "root": ".factory/skills",
+        "harness": "Factory Droid",
+        "scope": "project",
+        "next": "Start a new Droid session if needed, then invoke /{name}.",
+    },
+    "factory-global": {
+        "root": "~/.factory/skills",
+        "harness": "Factory Droid",
+        "scope": "global",
+        "next": "Start a new Droid session if needed, then invoke /{name}.",
+    },
+}
+
+TARGET_ROOTS = {name: details["root"] for name, details in TARGETS.items()}
+AGENT_SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+YAML_NON_STRING_PLAIN_PATTERN = re.compile(
+    r"^[+-]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9_]+)?|"
+    r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.(?:inf|nan)|"
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?)$",
+    re.IGNORECASE,
+)
+AGENT_SKILL_FRONTMATTER_FIELDS = {
+    "name",
+    "description",
+    "license",
+    "compatibility",
+    "metadata",
+    "allowed-tools",
 }
 
 STOP_WORDS = {
@@ -1164,13 +1343,24 @@ def command_discover(args: argparse.Namespace) -> None:
     print_ard_detail_summaries(summaries)
 
 
+def normalized_archive_path(filename: str) -> PurePosixPath:
+    normalized = filename.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if (
+        "\x00" in normalized
+        or path.is_absolute()
+        or ".." in path.parts
+        or (path.parts and path.parts[0].endswith(":"))
+    ):
+        raise SystemExit(f"Unsafe archive path: {filename}")
+    return path
+
+
 def safe_zip_members(zf: zipfile.ZipFile):
     for member in zf.infolist():
         if member.is_dir():
             continue
-        path = Path(member.filename)
-        if path.is_absolute() or ".." in path.parts:
-            raise SystemExit(f"Unsafe archive path: {member.filename}")
+        normalized_archive_path(member.filename)
         yield member
 
 
@@ -1185,10 +1375,13 @@ def skill_prefix_in_archive(zf: zipfile.ZipFile) -> str | None:
 
 
 def prepare_dest(dest: Path, force: bool) -> None:
-    if dest.exists():
+    if dest.exists() or dest.is_symlink():
         if not force:
             raise SystemExit(f"Destination already exists: {dest}\nUse --force to replace it.")
-        shutil.rmtree(dest)
+        if dest.is_dir() and not dest.is_symlink():
+            shutil.rmtree(dest)
+        else:
+            dest.unlink()
     dest.mkdir(parents=True, exist_ok=True)
 
 
@@ -1237,7 +1430,7 @@ def normalize_github_source_path(path: str) -> str:
 
 def github_archive_member_rel(member: zipfile.ZipInfo) -> str:
     """Return a GitHub zip member path relative to the archive root directory."""
-    parts = PurePosixPath(member.filename).parts
+    parts = normalized_archive_path(member.filename).parts
     if len(parts) <= 1:
         return ""
     return PurePosixPath(*parts[1:]).as_posix()
@@ -1394,14 +1587,280 @@ def resolve_install_dest(args: argparse.Namespace, capability_name: str) -> Path
     return Path(root).expanduser() / (args.name or capability_name)
 
 
-def installed_skill_name(dest: Path) -> str:
-    skill_file = dest / "SKILL.md"
+def parse_yaml_scalar(value: str) -> str:
+    value = value.strip()
+    quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+    if not quoted and " #" in value:
+        value = value.split(" #", 1)[0].rstrip()
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        return value[1:-1].replace("''", "'")
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, str):
+                return parsed
+        except json.JSONDecodeError:
+            return value[1:-1]
+    return value
+
+
+def frontmatter_value(raw: str, continuation: list[str]) -> str:
+    marker = raw.strip()
+    content = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
+    if re.fullmatch(r"[>|][+-]?", marker):
+        return ("\n" if marker.startswith("|") else " ").join(content).strip()
+    value = parse_yaml_scalar(marker)
+    if content:
+        suffix = " ".join(content)
+        value = f"{value} {suffix}".strip()
+    return value
+
+
+def parse_skill_frontmatter(text: str) -> dict[str, Any]:
+    lines = text.lstrip("\ufeff").splitlines()
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not lines or lines[0].strip() != "---":
+        return {
+            "fields": {},
+            "rawFields": {},
+            "body": "",
+            "errors": ["SKILL.md must start with YAML frontmatter delimited by ---"],
+            "warnings": warnings,
+        }
+    try:
+        closing = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+    except StopIteration:
+        return {
+            "fields": {},
+            "rawFields": {},
+            "body": "",
+            "errors": ["SKILL.md frontmatter is missing its closing --- delimiter"],
+            "warnings": warnings,
+        }
+
+    raw_fields: dict[str, tuple[str, list[str]]] = {}
+    current_key: str | None = None
+    field_pattern = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?:\s*(?P<value>.*))?$")
+    for line_number, line in enumerate(lines[1:closing], start=2):
+        if not line.strip() or line.lstrip().startswith("#"):
+            if current_key is not None:
+                raw_fields[current_key][1].append(line)
+            continue
+        if line.startswith((" ", "\t")):
+            if current_key is None:
+                errors.append(f"frontmatter line {line_number} is indented without a parent field")
+            else:
+                raw_fields[current_key][1].append(line)
+            continue
+        match = field_pattern.match(line)
+        if not match:
+            errors.append(f"frontmatter line {line_number} is not a top-level YAML field")
+            current_key = None
+            continue
+        key = match.group("key")
+        if key in raw_fields:
+            errors.append(f"frontmatter field '{key}' is declared more than once")
+            current_key = key
+            continue
+        raw_fields[key] = (match.group("value") or "", [])
+        current_key = key
+
+    fields = {key: frontmatter_value(raw, continuation) for key, (raw, continuation) in raw_fields.items()}
+    unknown = sorted(set(fields) - AGENT_SKILL_FRONTMATTER_FIELDS)
+    if unknown:
+        warnings.append(
+            "non-standard frontmatter fields may not work in every harness or Claude upload: " + ", ".join(unknown)
+        )
+    body = "\n".join(lines[closing + 1 :]).strip()
+    if not body:
+        warnings.append("SKILL.md has no instruction body")
+    return {
+        "fields": fields,
+        "rawFields": raw_fields,
+        "body": body,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def validate_required_scalar_shape(
+    raw_fields: dict[str, tuple[str, list[str]]],
+    key: str,
+    errors: list[str],
+) -> None:
+    if key not in raw_fields:
+        return
+    raw, continuation = raw_fields[key]
+    value = raw.strip()
+    if value and not re.fullmatch(r"[>|][+-]?", value):
+        quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+        mismatched_quote = value.startswith(("'", '"')) or value.endswith(("'", '"'))
+        invalid_double_quote = False
+        if quoted and value.startswith('"'):
+            try:
+                invalid_double_quote = not isinstance(json.loads(value), str)
+            except json.JSONDecodeError:
+                invalid_double_quote = True
+        invalid_plain = not quoted and (
+            value.startswith(("[", "{"))
+            or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
+            or bool(YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value))
+            or bool(re.search(r":\s", value))
+        )
+        if invalid_double_quote or (mismatched_quote and not quoted) or invalid_plain:
+            errors.append(f"frontmatter field '{key}' must be a YAML string scalar; quote it or use a block scalar")
+    if not value:
+        meaningful = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
+        if any(line.startswith("- ") or re.match(r"^[^:#]+:\s", line) for line in meaningful):
+            errors.append(f"frontmatter field '{key}' must be a string, not a sequence or mapping")
+
+
+def validate_skill_directory(skill_dir: Path, expected_name: str | None = None) -> dict[str, Any]:
+    skill_dir = skill_dir.expanduser()
+    skill_file = skill_dir if skill_dir.name == "SKILL.md" and skill_dir.is_file() else skill_dir / "SKILL.md"
+    directory = skill_file.parent
+    errors: list[str] = []
+    warnings: list[str] = []
     try:
         text = skill_file.read_text(encoding="utf-8")
-    except OSError:
-        return dest.name
-    match = re.search(r"(?m)^name:\s*['\"]?([a-z0-9][a-z0-9-]*)['\"]?\s*$", text)
-    return match.group(1) if match else dest.name
+    except FileNotFoundError:
+        return {
+            "path": str(skill_file),
+            "valid": False,
+            "portable": False,
+            "name": None,
+            "descriptionLength": 0,
+            "frontmatterFields": [],
+            "errors": ["skill directory must contain a file named exactly SKILL.md"],
+            "warnings": [],
+        }
+    except (OSError, UnicodeError) as error:
+        return {
+            "path": str(skill_file),
+            "valid": False,
+            "portable": False,
+            "name": None,
+            "descriptionLength": 0,
+            "frontmatterFields": [],
+            "errors": [f"SKILL.md must be readable UTF-8: {error}"],
+            "warnings": [],
+        }
+
+    parsed = parse_skill_frontmatter(text)
+    fields = parsed["fields"]
+    errors.extend(parsed["errors"])
+    warnings.extend(parsed["warnings"])
+    name = fields.get("name", "")
+    description = fields.get("description", "")
+    compatibility = fields.get("compatibility")
+    validate_required_scalar_shape(parsed["rawFields"], "name", errors)
+    validate_required_scalar_shape(parsed["rawFields"], "description", errors)
+
+    if not name:
+        errors.append("frontmatter field 'name' is required")
+    elif len(name) > 64 or not AGENT_SKILL_NAME_PATTERN.fullmatch(name):
+        errors.append("name must be 1-64 lowercase letters, numbers, or single hyphens")
+
+    directory_name = expected_name if expected_name is not None else directory.name
+    if name and directory_name and name != directory_name:
+        errors.append(f"frontmatter name '{name}' must match parent directory '{directory_name}'")
+
+    if not description:
+        errors.append("frontmatter field 'description' is required and must be non-empty")
+    elif len(description) > 1024:
+        errors.append("description must not exceed 1024 characters")
+
+    if compatibility is not None and (not compatibility or len(compatibility) > 500):
+        errors.append("compatibility must contain 1-500 characters when provided")
+
+    raw_metadata = parsed["rawFields"].get("metadata")
+    if raw_metadata:
+        metadata_value, metadata_lines = raw_metadata
+        if metadata_value.strip() and not metadata_value.strip().startswith("{"):
+            errors.append("metadata must be a YAML mapping from string keys to string values")
+        for line in metadata_lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and not re.match(r"^[^:#]+:\s*.+$", stripped):
+                errors.append("metadata must contain string key/value entries")
+                break
+
+    unknown = sorted(set(fields) - AGENT_SKILL_FRONTMATTER_FIELDS)
+    return {
+        "path": str(skill_file),
+        "valid": not errors,
+        "portable": not errors and not unknown,
+        "name": name or None,
+        "descriptionLength": len(description),
+        "frontmatterFields": sorted(fields),
+        "bodyLines": len(parsed["body"].splitlines()) if parsed["body"] else 0,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def require_valid_skill(skill_dir: Path, expected_name: str | None = None) -> dict[str, Any]:
+    validation = validate_skill_directory(skill_dir, expected_name)
+    if validation["valid"]:
+        return validation
+    details = "\n".join(f"- {message}" for message in validation["errors"])
+    raise SystemExit(f"Skill is not compatible with the Agent Skills specification:\n{details}")
+
+
+def target_next_step(target: str, skill_name: str) -> str:
+    return TARGETS[target]["next"].format(name=skill_name)
+
+
+def target_summary(target: str) -> dict[str, str]:
+    details = TARGETS[target]
+    return {
+        "target": target,
+        "harness": details["harness"],
+        "scope": details["scope"],
+        "root": details["root"],
+        "resolvedRoot": str(Path(details["root"]).expanduser()),
+    }
+
+
+def command_targets(args: argparse.Namespace) -> None:
+    names = sorted(TARGETS)
+    if args.harness:
+        needle = args.harness.casefold()
+        names = [
+            name
+            for name in names
+            if needle in name.casefold()
+            or needle in TARGETS[name]["harness"].casefold()
+            or needle in TARGETS[name].get("aliases", "").casefold()
+        ]
+    targets = [target_summary(name) for name in names]
+    if args.scope:
+        targets = [item for item in targets if item["scope"] == args.scope]
+    if args.json_output:
+        print_json({"default": "agents-project", "targets": targets})
+        return
+    print("Default target: agents-project (.agents/skills)")
+    for item in targets:
+        print(f"{item['target']:<20} {item['root']:<31} {item['harness']}")
+
+
+def command_validate_skill(args: argparse.Namespace) -> None:
+    path = Path(args.path).expanduser()
+    validation = validate_skill_directory(path)
+    if args.json_output:
+        print_json(validation)
+    else:
+        status = "valid" if validation["valid"] else "invalid"
+        print(f"{status}: {validation['path']}")
+        if validation.get("name"):
+            print(f"name: {validation['name']}")
+        print(f"portable: {'yes' if validation['portable'] else 'no'}")
+        for warning in validation["warnings"]:
+            print(f"warning: {warning}")
+        for error in validation["errors"]:
+            print(f"error: {error}")
+    if not validation["valid"]:
+        raise SystemExit(1)
 
 
 def normalize_sha256(value: str | None) -> str | None:
@@ -1597,17 +2056,34 @@ def install_ard_entry(entry: dict[str, Any], dest: Path, force: bool) -> tuple[s
     raise SystemExit(unsupported_ard_install_message(entry))
 
 
+def install_ard_entry_for_args(
+    entry: dict[str, Any],
+    args: argparse.Namespace,
+    install_name: str,
+) -> tuple[Path, str, str | None, dict[str, Any]]:
+    dest = resolve_install_dest(args, install_name)
+    if path_exists(dest) and not args.force:
+        raise SystemExit(f"Destination already exists: {dest}\nUse --force to replace it.")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{dest.name}.install-", dir=str(dest.parent)) as temp_root:
+        candidate = Path(temp_root) / dest.name
+        installed_from, checksum = install_ard_entry(entry, candidate, force=True)
+        validation = require_valid_skill(candidate, expected_name=dest.name)
+        replace_skill_dir(dest, candidate, keep_backup=False)
+        validation = {**validation, "path": str(dest / "SKILL.md")}
+    return dest, installed_from, checksum, validation
+
+
 def command_install(args: argparse.Namespace) -> None:
     base = registry_base(args)
     entry = resolve_ard_entry_for_install(base, args.ref)
     media_type = ard_entry_media_type(entry)
-    dest = resolve_install_dest(args, ard_entry_install_name(entry, args.ref))
     if not args.json_output:
         print_ard_trust_summary(entry)
 
-    installed_from, checksum = install_ard_entry(entry, dest, args.force)
-
-    skill_name = installed_skill_name(dest)
+    install_name = ard_entry_install_name(entry, args.ref)
+    dest, installed_from, checksum, validation = install_ard_entry_for_args(entry, args, install_name)
+    skill_name = str(validation["name"])
     result = {
         "registry": base,
         "api": "ard",
@@ -1616,10 +2092,12 @@ def command_install(args: argparse.Namespace) -> None:
         "slug": ard_slug(entry),
         "mediaType": media_type,
         "trustState": ard_trust_state(entry),
+        "target": args.target if not args.dest else None,
         "destination": str(dest),
         "installedFrom": installed_from,
         "skillName": skill_name,
-        "next": f"reload or restart your agent; in Pi run /reload and then /skill:{skill_name}",
+        "validation": validation,
+        "next": target_next_step(args.target, skill_name) if not args.dest else "Reload or restart the active harness and confirm the skill is listed.",
     }
     if checksum:
         result["checksumSha256"] = checksum
@@ -1629,7 +2107,10 @@ def command_install(args: argparse.Namespace) -> None:
 
     print(f"Installed {entry.get('identifier', args.ref)} to {dest}")
     print(f"source: {installed_from}")
-    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:" + skill_name)
+    print(f"Validated Agent Skills metadata: {skill_name} ({validation['descriptionLength']} description characters)")
+    for warning in validation["warnings"]:
+        print(f"warning: {warning}")
+    print("Next: " + str(result["next"]))
 
 
 def confirm_bulk_install(args: argparse.Namespace, count: int, target: str) -> None:
@@ -1675,6 +2156,7 @@ def command_install_catalog(args: argparse.Namespace) -> None:
             "api": "ard",
             "catalog": args.catalog,
             "target": args.target,
+            "targetDetails": target_summary(args.target),
             "count": len(planned),
             "limit": limit,
             "dryRun": True,
@@ -1692,10 +2174,21 @@ def command_install_catalog(args: argparse.Namespace) -> None:
     results: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     for item, entry in zip(planned, entries):
-        dest = Path(str(item["destination"]))
         try:
-            installed_from, checksum = install_ard_entry(entry, dest, args.force)
-            result = {**item, "installed": True, "installedFrom": installed_from}
+            dest, installed_from, checksum, validation = install_ard_entry_for_args(
+                entry,
+                args,
+                str(item["skillName"]),
+            )
+            result = {
+                **item,
+                "destination": str(dest),
+                "skillName": validation["name"],
+                "installed": True,
+                "installedFrom": installed_from,
+                "validation": validation,
+                "next": target_next_step(args.target, str(validation["name"])),
+            }
             if checksum:
                 result["checksumSha256"] = checksum
             results.append(result)
@@ -1709,6 +2202,7 @@ def command_install_catalog(args: argparse.Namespace) -> None:
         "api": "ard",
         "catalog": args.catalog,
         "target": args.target,
+        "targetDetails": target_summary(args.target),
         "count": len(results),
         "errorCount": len(errors),
         "limit": limit,
@@ -1725,7 +2219,7 @@ def command_install_catalog(args: argparse.Namespace) -> None:
         print(f"error: {error['slug'] or error['identifier']}: {error['message']}")
     if errors:
         raise SystemExit(1)
-    print("Next: reload or restart your agent so it notices the installed skills.")
+    print("Next: " + target_next_step(args.target, "<skill-name>"))
 
 
 def strip_yaml_scalar(value: str) -> str:
@@ -1956,6 +2450,11 @@ def validate_downloaded_self_skill(dest: Path) -> None:
     missing = [item for item in required if not (dest / item).exists()]
     if missing:
         raise SystemExit("Downloaded Capelry skill is incomplete; missing: " + ", ".join(missing))
+    require_valid_skill(dest, expected_name="capelry")
+
+
+def path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
 
 
 def remove_path(path: Path) -> None:
@@ -1991,25 +2490,34 @@ def replace_skill_dir(dest: Path, new_dir: Path, *, keep_backup: bool) -> Path |
     backup: Path | None = None
     temp_old_parent: Path | None = None
     temp_old: Path | None = None
-    if dest.exists():
+    preserve_old_temp = False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if path_exists(dest):
         if keep_backup:
             backup = backup_archive_path_for(dest)
             create_path_archive(dest, backup)
-        temp_old_parent = Path(tempfile.mkdtemp(prefix="capelry-replace-old-"))
+        temp_old_parent = Path(tempfile.mkdtemp(prefix=f".{dest.name}.old-", dir=str(dest.parent)))
         temp_old = temp_old_parent / dest.name
         shutil.move(str(dest), str(temp_old))
     try:
         shutil.move(str(new_dir), str(dest))
-    except Exception:
-        if dest.exists():
-            remove_path(dest)
-        if temp_old and temp_old.exists():
-            shutil.move(str(temp_old), str(dest))
+    except BaseException:
+        try:
+            if path_exists(dest):
+                remove_path(dest)
+            if temp_old and path_exists(temp_old):
+                shutil.move(str(temp_old), str(dest))
+        except BaseException as rollback_error:
+            preserve_old_temp = bool(temp_old and path_exists(temp_old))
+            location = str(temp_old) if preserve_old_temp else "unavailable"
+            raise RuntimeError(
+                f"Skill replacement and rollback both failed; the previous install is preserved at {location}"
+            ) from rollback_error
         if backup and backup.exists():
             backup.unlink()
         raise
     finally:
-        if temp_old_parent and temp_old_parent.exists():
+        if temp_old_parent and temp_old_parent.exists() and not preserve_old_temp:
             shutil.rmtree(temp_old_parent, ignore_errors=True)
     return backup
 
@@ -2032,6 +2540,8 @@ def sync_install_info(args: argparse.Namespace) -> dict[str, Any]:
     if source_dir == dest_dir:
         raise SystemExit("Local sync source and destination are the same directory")
     validate_downloaded_self_skill(source_dir)
+    if dest_dir.name != "capelry":
+        raise SystemExit("Capelry must be installed in a directory named 'capelry' for cross-harness compatibility")
     dest_version = self_local_version(dest_dir) if dest_dir.exists() else None
     return {
         "sourceDir": str(source_dir),
@@ -2044,7 +2554,8 @@ def sync_install_info(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def copy_local_skill_source(source_dir: Path, dest_dir: Path, *, keep_backup: bool) -> Path | None:
-    with tempfile.TemporaryDirectory(prefix="capelry-local-sync-") as temp_root:
+    dest_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{dest_dir.name}.sync-", dir=str(dest_dir.parent)) as temp_root:
         candidate = Path(temp_root) / "capelry"
         shutil.copytree(source_dir, candidate, ignore=sync_ignore)
         validate_downloaded_self_skill(candidate)
@@ -2087,7 +2598,8 @@ def command_self_update(args: argparse.Namespace) -> None:
         )
 
     owner, repo = split_github_slug(SELF_GITHUB_REPOSITORY)
-    with tempfile.TemporaryDirectory(prefix="capelry-self-update-") as temp_root:
+    skill_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{skill_dir.name}.update-", dir=str(skill_dir.parent)) as temp_root:
         candidate = Path(temp_root) / "capelry"
         archive_error: BaseException | None = None
         try:
@@ -2104,7 +2616,8 @@ def command_self_update(args: argparse.Namespace) -> None:
         validate_downloaded_self_skill(candidate)
         backup = replace_skill_dir(skill_dir, candidate, keep_backup=args.keep_backup)
 
-    result = {**info, "updated": True, "backup": str(backup) if backup else None}
+    next_step = "Reload or restart the active harness and confirm capelry appears in its skills list."
+    result = {**info, "updated": True, "backup": str(backup) if backup else None, "next": next_step}
     if args.json_output:
         print_json(result)
         return
@@ -2112,7 +2625,7 @@ def command_self_update(args: argparse.Namespace) -> None:
     print(f"Updated Capelry skill to {info['remoteVersion']} from {info['remoteRef']}.")
     if backup:
         print(f"backup: {backup}")
-    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:capelry")
+    print("Next: " + next_step)
 
 
 def command_sync_install(args: argparse.Namespace) -> None:
@@ -2133,7 +2646,12 @@ def command_sync_install(args: argparse.Namespace) -> None:
         Path(info["destDir"]),
         keep_backup=not args.no_backup,
     )
-    result = {**info, "updated": True, "backup": str(backup) if backup else None}
+    next_step = (
+        target_next_step(args.target, "capelry")
+        if not args.dest
+        else "Reload or restart the active harness and confirm capelry appears in its skills list."
+    )
+    result = {**info, "updated": True, "backup": str(backup) if backup else None, "next": next_step}
     if args.json_output:
         print_json(result)
         return
@@ -2141,7 +2659,7 @@ def command_sync_install(args: argparse.Namespace) -> None:
     print(f"Synced local Capelry skill from {info['sourceDir']} to {info['destDir']}.")
     if backup:
         print(f"backup: {backup}")
-    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:capelry")
+    print("Next: " + next_step)
 
 
 def add_json_argument(parser: argparse.ArgumentParser) -> None:
@@ -2235,7 +2753,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--status", help="Compatibility no-op: current public ARD routes do not expose status filters")
     discover.add_argument("--domain", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
     discover.add_argument("--phase", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
-    add_install_snippet_argument(discover, default="pi-project")
+    add_install_snippet_argument(discover, default="agents-project")
     add_json_argument(discover)
     discover.set_defaults(func=command_discover)
 
@@ -2251,15 +2769,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bulk-inspect up to 25 ARD identifiers or slugs with /agents",
     )
     bulk_info.add_argument("refs", nargs="+", help="Refs as space-separated or comma-separated ARD identifiers or slugs")
-    add_install_snippet_argument(bulk_info, default="pi-project")
+    add_install_snippet_argument(bulk_info, default="agents-project")
     add_json_argument(bulk_info)
     bulk_info.set_defaults(func=command_bulk_info)
 
-    install = subparsers.add_parser("install", help="Install a supported skill from an ARD entry")
+    targets = subparsers.add_parser("targets", help="List verified coding-harness install targets and paths")
+    targets.add_argument("--harness", help="Filter by harness or target name")
+    targets.add_argument("--scope", choices=("project", "global"), help="Filter by install scope")
+    add_json_argument(targets)
+    targets.set_defaults(func=command_targets)
+
+    validate_skill = subparsers.add_parser(
+        "validate-skill",
+        aliases=["validate"],
+        help="Validate a skill directory against portable Agent Skills requirements",
+    )
+    validate_skill.add_argument("path", help="Skill directory or SKILL.md path")
+    add_json_argument(validate_skill)
+    validate_skill.set_defaults(func=command_validate_skill)
+
+    install = subparsers.add_parser("install", help="Install and validate a supported skill from an ARD entry")
     install.add_argument("ref", help="ARD slug namespace/catalog/resource or urn:air:...")
     install.add_argument("--target", choices=sorted(TARGET_ROOTS), default="agents-project")
     install.add_argument("--dest", help="Exact destination directory")
-    install.add_argument("--name", help="Install directory name override")
+    install.add_argument("--name", help="Install directory name override; must match SKILL.md name")
     install.add_argument("--force", action="store_true", help="Replace an existing destination")
     add_json_argument(install)
     install.set_defaults(func=command_install)

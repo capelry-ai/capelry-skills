@@ -21,7 +21,7 @@
         "archiveUrl": "https://codeload.github.com/capelry-ai/capelry-skills/zip/main",
         "defaultInstallName": "capelry"
       },
-      "description": "Reference ARD discovery and install client for agent coding environments. Bootstraps from GitHub source, searches catalog-aware Capelry ARD routes, explores facets, inspects trust metadata, and installs supported skill media types.",
+      "description": "Harness-aware ARD discovery and install client. Selects verified skill roots for major coding agents, validates portable SKILL.md metadata, installs transactionally, and reports harness-specific activation steps.",
       "tags": [
         "ard",
         "ai-catalog",
@@ -37,17 +37,20 @@
         "discover",
         "inspect",
         "install",
+        "validate",
+        "harness-targeting",
         "bootstrap",
         "self-update"
       ],
       "representativeQueries": [
         "search an ARD registry from an agent",
-        "install a Capelry skill into Pi",
+        "install a Capelry skill into the correct Claude Code or Codex directory",
+        "validate Agent Skills frontmatter before installation",
         "explore Capelry catalog facets",
         "bootstrap capability discovery into a fresh coding project"
       ],
-      "version": "2.0.9",
-      "updatedAt": "2026-07-03T00:00:00Z",
+      "version": "2.1.0",
+      "updatedAt": "2026-08-27T00:00:00Z",
       "metadata": {
         "com.capelry.packageType": "skill",
         "com.capelry.slug": "capelry-ai/capelry-skills/capelry",
@@ -58,7 +61,7 @@
         "com.capelry.sourceRepository": "https://github.com/capelry-ai/capelry-skills",
         "com.capelry.sourceRepositoryFullName": "capelry-ai/capelry-skills",
         "com.capelry.sourcePath": "skills/capelry",
-        "com.capelry.installTargets": "agents-project,pi-project,claude-project,codex-project"
+        "com.capelry.installTargets": "agents-project,agents-global,claude-project,claude-global,codex-project,codex-global,pi-project,pi-global,opencode-project,opencode-global,gemini-project,gemini-global,cursor-project,cursor-global,windsurf-project,windsurf-global,copilot-project,copilot-global,cline-project,cline-global,roo-project,roo-global,junie-project,junie-global,kiro-project,kiro-global,factory-project,factory-global"
       },
       "trustManifest": {
         "identity": "https://github.com/capelry-ai/capelry-skills",

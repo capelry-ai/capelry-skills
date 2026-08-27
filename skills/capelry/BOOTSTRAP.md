@@ -24,28 +24,29 @@ Examples use `python3`; if your environment only exposes Python 3 as `python` or
 
 ## Recommended fresh-project install
 
-Run these commands from the root of the project where you want agents to use Capelry. By default, they install into the portable project-local Agent Skills location. If you know the active coding agent has a native project skill directory, choose one of the target options below instead.
+Run these commands from the project root. Replace `TARGET` with the active harness's project target from the matrix below (for example `claude-project`, `codex-project`, `pi-project`, or `opencode-project`). Use `agents-project` only for a harness that documents `.agents/skills` discovery.
 
 ```text
 python3 -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/capelry-ai/capelry-skills/main/skills/capelry/scripts/bootstrap.py', 'capelry-bootstrap.py')"
-python3 capelry-bootstrap.py
+python3 capelry-bootstrap.py --target TARGET
 ```
 
 For PowerShell, the same commands work. If your Python launcher is `py`, use `py` instead of `python3`:
 
 ```powershell
 py -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/capelry-ai/capelry-skills/main/skills/capelry/scripts/bootstrap.py', 'capelry-bootstrap.py')"
-py capelry-bootstrap.py
+py capelry-bootstrap.py --target TARGET
 ```
 
-The downloaded `capelry-bootstrap.py` script fetches the skill source from `https://github.com/capelry-ai/capelry-skills` and copies only the Capelry skill directory into your project.
+The downloaded `capelry-bootstrap.py` script fetches only the Capelry skill source, rejects unsafe archive paths, validates the Agent Skills frontmatter, and atomically replaces an existing destination only after validation succeeds.
 
-Agent note: if you know you are running inside Pi, Claude Code, Codex, or another coding agent with a preferred skill location, use the install target guidance below and pass the matching `--target`. If you are unsure, the default portable target is safe.
+Agent requirement: identify the active coding harness and pass the matching `--target` from the matrix below. The default `agents-project` path is natively discovered by Codex, Pi, OpenCode, Gemini CLI, Cursor, GitHub Copilot, Roo Code, Junie, Factory, and OpenHands. It is **not** a documented discovery path for Claude Code, Cline, Kiro, or every Windsurf surface; use those harnesses' native targets.
 
-To verify the install, run `scripts/capelry.py` from the installed skill directory. `search`, `discover`, `info`, and supported `install` flows use ARD by default. For the default portable target:
+To verify the install, run `scripts/capelry.py` from the installed skill directory. For the default portable target:
 
 ```text
-python3 .agents/skills/capelry/scripts/capelry.py search skill --type skill
+python3 .agents/skills/capelry/scripts/capelry.py validate-skill .agents/skills/capelry
+python3 .agents/skills/capelry/scripts/capelry.py targets --json
 python3 .agents/skills/capelry/scripts/capelry.py version
 ```
 
@@ -65,23 +66,23 @@ After install, reload or restart your agent. In Pi, run:
 
 ## Install from a checked-out package
 
-If you are reading this inside an extracted Capelry skill package, run the bundled OS-neutral bootstrap script from the skill directory:
+If you are reading this inside an extracted Capelry skill package, run the bundled OS-neutral bootstrap script from the skill directory, replacing `TARGET` with the active harness target:
 
 ```text
-python3 scripts/bootstrap.py
+python3 scripts/bootstrap.py --target TARGET
 ```
 
 If you are at a repository root that contains `skills/capelry`, run:
 
 ```text
-python3 skills/capelry/scripts/bootstrap.py
+python3 skills/capelry/scripts/bootstrap.py --target TARGET
 ```
 
 PowerShell equivalents:
 
 ```powershell
-py .\scripts\bootstrap.py
-py .\skills\capelry\scripts\bootstrap.py
+py .\scripts\bootstrap.py --target TARGET
+py .\skills\capelry\scripts\bootstrap.py --target TARGET
 ```
 
 Useful options:
@@ -91,7 +92,15 @@ python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills
 python3 scripts/bootstrap.py --repo https://github.com/capelry-ai/capelry-skills --ref vX.Y.Z --target agents-project  # example published release tag
 python3 scripts/bootstrap.py --target pi-project
 python3 scripts/bootstrap.py --target claude-project
-python3 scripts/bootstrap.py --target codex-project
+python3 scripts/bootstrap.py --target codex-project       # installs to Codex's documented .agents/skills path
+python3 scripts/bootstrap.py --target opencode-project
+python3 scripts/bootstrap.py --target gemini-project
+python3 scripts/bootstrap.py --target cursor-project
+python3 scripts/bootstrap.py --target windsurf-project
+python3 scripts/bootstrap.py --target copilot-project
+python3 scripts/bootstrap.py --target cline-project
+python3 scripts/bootstrap.py --target roo-project
+python3 scripts/bootstrap.py --help                       # all project/global targets
 python3 scripts/bootstrap.py --source-path skills/capelry
 python3 scripts/bootstrap.py --source-path .pi/skills/capelry
 python3 scripts/bootstrap.py --skills-dir .custom/skills
@@ -143,29 +152,28 @@ py scripts\bootstrap.py
 
 ## Install target guidance
 
-Prefer project-local installs unless the user asks for global installation. If the active coding agent already has a native skill location, use it. If you are unsure, use the portable default: `.agents/skills/capelry`.
+Prefer project scope unless the user explicitly requests a global install. Use a native target for one harness; use `agents-project` for a shared repository only when every intended harness documents `.agents/skills` discovery.
 
-| Coding agent / use case | Recommended project-local path | Bootstrap option | After install |
-| ----------------------- | ------------------------------ | ---------------- | ------------- |
-| Portable Agent Skills / unsure | `.agents/skills/capelry` | `--target agents-project` or no option | Tell the agent to read `.agents/skills/capelry/SKILL.md` if it does not auto-load skills. |
-| Pi | `.pi/skills/capelry` | `--target pi-project` | Run `/reload`, then `/skill:capelry`. |
-| Claude Code | `.claude/skills/capelry` | `--target claude-project` | Restart Claude Code; if needed, point it at `.claude/skills/capelry/SKILL.md`. |
-| OpenAI Codex | `.agents/skills/capelry` or `.codex/skills/capelry` if configured | `--target agents-project` or `--target codex-project` | Restart the Codex session; if needed, point it at the installed `SKILL.md`. |
-| Cursor | `.agents/skills/capelry` | `--target agents-project` | Reference `.agents/skills/capelry/SKILL.md` from project rules/instructions or chat. |
-| Windsurf | `.agents/skills/capelry` | `--target agents-project` | Reference `.agents/skills/capelry/SKILL.md` from project rules/instructions or chat. |
-| GitHub Copilot | `.agents/skills/capelry` | `--target agents-project` | Add a project instruction pointing Copilot at `.agents/skills/capelry/SKILL.md`. |
-| Cline / Roo Code | `.agents/skills/capelry` | `--target agents-project` | Add the installed `SKILL.md` to project rules/instructions. |
+| Harness | Project path / target | Global path / target | Confirm after install |
+| --- | --- | --- | --- |
+| Portable Agent Skills | `.agents/skills/capelry` / `agents-project` | `~/.agents/skills/capelry` / `agents-global` | Reload/restart and check the harness's skill list. |
+| Claude Code | `.claude/skills/capelry` / `claude-project` | `~/.claude/skills/capelry` / `claude-global` | Invoke `/capelry`; restart only if the top-level skills directory was created after startup. |
+| OpenAI Codex | `.agents/skills/capelry` / `codex-project` | `~/.agents/skills/capelry` / `codex-global` | Use `/skills` or `$capelry`; restart only if absent. |
+| Pi | `.pi/skills/capelry` / `pi-project` | `~/.pi/agent/skills/capelry` / `pi-global` | Run `/reload`, then `/skill:capelry`. |
+| OpenCode | `.opencode/skills/capelry` / `opencode-project` | `~/.config/opencode/skills/capelry` / `opencode-global` | Confirm the `skill` tool lists it and permissions allow it. |
+| Gemini CLI | `.gemini/skills/capelry` / `gemini-project` | `~/.gemini/skills/capelry` / `gemini-global` | Run `/skills reload`, then `/skills list`. |
+| Cursor | `.cursor/skills/capelry` / `cursor-project` | `~/.cursor/skills/capelry` / `cursor-global` | Open **Customize > Skills** or invoke `/capelry`. |
+| Windsurf Cascade | `.windsurf/skills/capelry` / `windsurf-project` | `~/.codeium/windsurf/skills/capelry` / `windsurf-global` | Invoke `@capelry`; reopen Cascade if absent. |
+| GitHub Copilot / VS Code | `.github/skills/capelry` / `copilot-project` | `~/.copilot/skills/capelry` / `copilot-global` | In Copilot CLI run `/skills reload` and `/skills info capelry`. |
+| Cline | `.cline/skills/capelry` / `cline-project` | `~/.cline/skills/capelry` / `cline-global` | Enable it in the Skills menu or invoke `/capelry`. |
+| Roo Code | `.roo/skills/capelry` / `roo-project` | `~/.roo/skills/capelry` / `roo-global` | Confirm it is available in the current mode. |
+| JetBrains Junie | `.junie/skills/capelry` / `junie-project` | `~/.junie/skills/capelry` / `junie-global` | Invoke `/capelry` or `$capelry`. |
+| Kiro | `.kiro/skills/capelry` / `kiro-project` | `~/.kiro/skills/capelry` / `kiro-global` | Restart if needed; custom agents need a `skill://` resource. |
+| Factory Droid | `.factory/skills/capelry` / `factory-project` | `~/.factory/skills/capelry` / `factory-global` | Start a new Droid session if absent, then invoke `/capelry`. |
 
-Global targets are available when explicitly requested:
+The installed CLI's `targets` command is the machine-readable source of truth. The evidence-backed matrix, portability caveats, and official documentation links are bundled at `references/harnesses.md`.
 
-| Target option | Path |
-| ------------- | ---- |
-| `--target agents-global` | `~/.agents/skills/capelry` |
-| `--target pi-global` | `~/.pi/agent/skills/capelry` |
-| `--target claude-global` | `~/.claude/skills/capelry` |
-| `--target codex-global` | `~/.codex/skills/capelry` |
-
-For agents that do not have a native skill loader, add or paste `SKILL.md` as project instructions and tell the agent to use `scripts/capelry.py` for registry operations.
+For agents without a documented native skill loader, do not claim automatic discovery. Add or paste `SKILL.md` as explicit project instructions and tell the agent to use `scripts/capelry.py` directly.
 
 ## Local source checkout sync
 
@@ -216,23 +224,24 @@ Explore catalog-aware facet buckets:
 python3 <capelry-skill-dir>/scripts/capelry.py explore "skill creator" --field metadata.com.capelry.catalogPath --limit 10
 ```
 
-Build a discovery shortlist for a task:
+List verified harness targets and build a discovery shortlist for the selected target:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py discover "feature planning skills" --query "feature planning,feature,prd,implementation plan" --top 5 --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py targets --json
+python3 <capelry-skill-dir>/scripts/capelry.py discover "feature planning skills" --query "feature planning,feature,prd,implementation plan" --top 5 --install-snippet agents-project
 ```
 
 Inspect one capability before installing:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet agents-project
 ```
 
 Capelry v2.0.6 and later use catalog-aware ARD discovery only. Human refs use `namespace/catalog/resource` slug metadata, so use `info` for each shortlisted slug or URN before installing:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet pi-project
-python3 <capelry-skill-dir>/scripts/capelry.py info urn:air:github.com:capelry-ai:capelry-skills:capelry --install-snippet pi-project
+python3 <capelry-skill-dir>/scripts/capelry.py info capelry-ai/capelry-skills/capelry --install-snippet agents-project
+python3 <capelry-skill-dir>/scripts/capelry.py info urn:air:github.com:capelry-ai:capelry-skills:capelry --install-snippet agents-project
 ```
 
 Install a skill into the portable project location:
@@ -247,11 +256,11 @@ Install into Pi project skills instead:
 python3 <capelry-skill-dir>/scripts/capelry.py install capelry-ai/capelry-skills/capelry --target pi-project
 ```
 
-Install every supported skill from a catalog, with a dry run first:
+Install every supported skill from a catalog, with a dry run first. Replace `agents-project` with the active harness target when needed:
 
 ```text
-python3 <capelry-skill-dir>/scripts/capelry.py install-catalog y30k/ai-capabilities --target pi-project --dry-run
-python3 <capelry-skill-dir>/scripts/capelry.py install-catalog y30k/ai-capabilities --target pi-project --force --yes
+python3 <capelry-skill-dir>/scripts/capelry.py install-catalog y30k/ai-capabilities --target agents-project --dry-run
+python3 <capelry-skill-dir>/scripts/capelry.py install-catalog y30k/ai-capabilities --target agents-project --force --yes
 ```
 
 PowerShell examples:
@@ -265,17 +274,14 @@ py <capelry-skill-dir>/scripts/capelry.py install capelry-ai/capelry-skills/cape
 
 1. Download the source archive from `https://github.com/capelry-ai/capelry-skills/archive/refs/heads/main.zip`.
 2. Extract the Capelry skill directory. The bootstrap script auto-detects `skills/capelry` and `.pi/skills/capelry`; use whichever exists in the archive.
-3. Copy it so `SKILL.md` lands at one of these paths:
-   - `.agents/skills/capelry/SKILL.md`
-   - `.pi/skills/capelry/SKILL.md`
-   - `.claude/skills/capelry/SKILL.md`
-   - `~/.agents/skills/capelry/SKILL.md`
-4. Reload or restart your agent.
+3. Copy it so `SKILL.md` lands under the active harness path in the install target table above, in a directory named exactly `capelry`.
+4. Run `python3 <installed-path>/scripts/capelry.py validate-skill <installed-path>`.
+5. Follow the harness-specific confirmation step from the table.
 
 ## Agent prompt fallback
 
 If a tool has no skill installer but can read files, paste this instruction:
 
 ```text
-Install the Capelry skill from https://github.com/capelry-ai/capelry-skills into this project as a project-local Agent Skill. Choose the best project-local skill directory for this coding agent; if unsure, use the portable Agent Skills default at .agents/skills/capelry/SKILL.md. Use the source path skills/capelry; if that path is not present, try .pi/skills/capelry. Then use it to search and install capabilities from Capelry.com.
+Install the Capelry skill from https://github.com/capelry-ai/capelry-skills into this project as a project-local Agent Skill. Identify this coding harness and use its documented native skill directory from BOOTSTRAP.md; use .agents/skills/capelry only when this harness documents that path. Keep the directory name capelry so it matches SKILL.md. Use source path skills/capelry, validate the installed skill, then follow the harness-specific reload/list step before using it to install capabilities from Capelry.com.
 ```
