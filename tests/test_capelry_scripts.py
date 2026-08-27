@@ -1009,6 +1009,119 @@ class CapelryScriptTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "cannot continue a non-block scalar"):
                 bootstrap.validate_skill_directory(skill_dir, "continuation-skill")
 
+    def test_skill_validators_apply_block_scalar_chomping(self) -> None:
+        capelry = load_module("capelry_chomping_validation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_chomping_validation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "chomping-skill"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            trailing_blank_lines = "\n" * 1100
+            for marker in ("|+", ">+", "|2+", "|+2", "|+\t# keep trailing lines"):
+                skill_file.write_text(
+                    f"---\nname: chomping-skill\ndescription: {marker}\n  a{trailing_blank_lines}---\n# Body\n",
+                    encoding="utf-8",
+                )
+                report = capelry.validate_skill_directory(skill_dir)
+                self.assertFalse(report["valid"], marker)
+                self.assertIn("description must not exceed 1024 characters", report["errors"])
+                with self.assertRaisesRegex(SystemExit, "description must contain 1-1024 characters"):
+                    bootstrap.validate_skill_directory(skill_dir, "chomping-skill")
+
+            for marker, expected_length in (("|-", 1), (">-", 1), ("|", 2), (">", 2)):
+                skill_file.write_text(
+                    f"---\nname: chomping-skill\ndescription: {marker}\n  a{trailing_blank_lines}---\n# Body\n",
+                    encoding="utf-8",
+                )
+                report = capelry.validate_skill_directory(skill_dir)
+                bootstrap_report = bootstrap.validate_skill_directory(skill_dir, "chomping-skill")
+                self.assertTrue(report["valid"], marker)
+                self.assertEqual(report["descriptionLength"], expected_length)
+                self.assertEqual(bootstrap_report["descriptionLength"], expected_length)
+
+            skill_file.write_text(
+                "---\nname: chomping-skill\ndescription: |\n  a\n# top-level YAML comment\n---\n# Body\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
+            self.assertEqual(
+                bootstrap.validate_skill_directory(skill_dir, "chomping-skill")["descriptionLength"],
+                2,
+            )
+
+    def test_skill_validators_preserve_quoted_whitespace(self) -> None:
+        capelry = load_module("capelry_quoted_whitespace", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_quoted_whitespace", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "quoted-space"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text(
+                "---\nname: ' quoted-space '\ndescription: Valid description.\n---\n# Body\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(capelry.validate_skill_directory(skill_dir)["valid"])
+            with self.assertRaisesRegex(SystemExit, "name must be 1-64"):
+                bootstrap.validate_skill_directory(skill_dir, "quoted-space")
+
+            long_description = " " + "x" * 1024
+            skill_file.write_text(
+                f'---\nname: quoted-space\ndescription: "{long_description}"\n---\n# Body\n',
+                encoding="utf-8",
+            )
+            self.assertFalse(capelry.validate_skill_directory(skill_dir)["valid"])
+            with self.assertRaisesRegex(SystemExit, "description must contain 1-1024"):
+                bootstrap.validate_skill_directory(skill_dir, "quoted-space")
+
+    def test_skill_validators_recognize_tab_separated_inline_comments(self) -> None:
+        capelry = load_module("capelry_tab_comment", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_tab_comment", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "tab-comment"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text(
+                "---\nname: tab-comment\ndescription: true\t# documented\n---\n# Body\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(capelry.validate_skill_directory(skill_dir)["valid"])
+            with self.assertRaisesRegex(SystemExit, "must be a YAML string"):
+                bootstrap.validate_skill_directory(skill_dir, "tab-comment")
+
+            skill_file.write_text(
+                '---\nname: tab-comment\ndescription: "Use for #incident triage"\t# documented\n---\n# Body\n',
+                encoding="utf-8",
+            )
+            report = capelry.validate_skill_directory(skill_dir)
+            bootstrap_report = bootstrap.validate_skill_directory(skill_dir, "tab-comment")
+            self.assertTrue(report["valid"])
+            self.assertEqual(report["descriptionLength"], len("Use for #incident triage"))
+            self.assertEqual(bootstrap_report["descriptionLength"], len("Use for #incident triage"))
+
+    def test_metadata_duplicate_detection_uses_resolved_string_keys(self) -> None:
+        capelry = load_module("capelry_metadata_duplicate_keys", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_metadata_duplicate_keys", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "metadata-duplicates"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            for first, second in (
+                ("foo", "'foo'"),
+                ("foo", '"f\\x6fo"'),
+                ("'a''b'", '"a\'b"'),
+                ('"foo:bar"', '"foo\\x3abar"'),
+            ):
+                skill_file.write_text(
+                    "---\nname: metadata-duplicates\ndescription: Validate equivalent metadata keys.\n"
+                    f"metadata:\n  {first}: one\n  {second}: two\n---\n# Body\n",
+                    encoding="utf-8",
+                )
+                report = capelry.validate_skill_directory(skill_dir)
+                self.assertFalse(report["valid"], (first, second))
+                self.assertIn("declared more than once", " ".join(report["errors"]))
+                with self.assertRaisesRegex(SystemExit, "declared more than once"):
+                    bootstrap.validate_skill_directory(skill_dir, "metadata-duplicates")
+
     def test_skill_validators_enforce_frontmatter_lexical_rules(self) -> None:
         capelry = load_module("capelry_lexical_validation", CAPELRY_SCRIPT)
         bootstrap = load_module("bootstrap_lexical_validation", BOOTSTRAP_SCRIPT)
@@ -1097,8 +1210,11 @@ class CapelryScriptTests(unittest.TestCase):
             (skill_dir / "SKILL.md").write_text(
                 '---\nname: double-quote-skill\ndescription: "a\\x41"\n---\n\n# Instructions\n', encoding="utf-8"
             )
-            self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
-            bootstrap.validate_skill_directory(skill_dir, "double-quote-skill")
+            report = capelry.validate_skill_directory(skill_dir)
+            bootstrap_report = bootstrap.validate_skill_directory(skill_dir, "double-quote-skill")
+            self.assertTrue(report["valid"])
+            self.assertEqual(report["descriptionLength"], 2)
+            self.assertEqual(bootstrap_report["descriptionLength"], 2)
 
     def test_optional_portable_fields_must_be_string_scalars(self) -> None:
         capelry = load_module("capelry_optional_scalar_validation", CAPELRY_SCRIPT)
@@ -1141,7 +1257,7 @@ class CapelryScriptTests(unittest.TestCase):
                 "block-indent-skill",
             )
 
-            for marker in ("|2", "|2-", "|-2", ">2+", ">+2"):
+            for marker in ("|2", "|2-", "|-2", ">2+", ">+2", "|2 # explicit indentation"):
                 skill_file.write_text(
                     f"---\nname: block-indent-skill\ndescription: {marker}\n"
                     "  explicit indentation\n---\n\n# Instructions\n",
@@ -1506,6 +1622,74 @@ class CapelryScriptTests(unittest.TestCase):
                 self.assertIn(expected_error, result.stderr)
                 self.assertEqual(marker.read_text(encoding="utf-8"), "original")
                 self.assertIn("Existing valid skill", (dest / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_new_yaml_schema_failures_cannot_replace_existing_installs(self) -> None:
+        capelry = load_module("capelry_new_yaml_atomic", CAPELRY_SCRIPT)
+        long_blank_lines = "\n" * 1100
+        fixtures = {
+            "chomp-invalid": f"---\nname: chomp-invalid\ndescription: |+\n  a{long_blank_lines}---\n# Body\n",
+            "quoted-invalid": "---\nname: ' quoted-invalid '\ndescription: Valid description.\n---\n# Body\n",
+            "tab-invalid": "---\nname: tab-invalid\ndescription: true\t# documented\n---\n# Body\n",
+            "metadata-invalid": (
+                "---\nname: metadata-invalid\ndescription: Validate equivalent metadata keys.\n"
+                "metadata:\n  foo: one\n  'foo': two\n---\n# Body\n"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name, candidate_skill in fixtures.items():
+                dest = Path(tmpdir) / name
+                dest.mkdir()
+                existing = RegistryFixtureHandler.skill_md(name, "Existing valid skill. Use for rollback testing.")
+                (dest / "SKILL.md").write_text(existing, encoding="utf-8")
+                marker = dest / "preserve-me.txt"
+                marker.write_text("original", encoding="utf-8")
+                args = SimpleNamespace(dest=str(dest), name=None, target="agents-project", force=True)
+
+                def fake_install(_entry, candidate: Path, force: bool, source=candidate_skill):
+                    self.assertTrue(force)
+                    candidate.mkdir(parents=True)
+                    (candidate / "SKILL.md").write_text(source, encoding="utf-8")
+                    return "fixture", None
+
+                with mock.patch.object(capelry, "install_ard_entry", side_effect=fake_install):
+                    with self.assertRaises(SystemExit, msg=name):
+                        capelry.install_ard_entry_for_args({}, args, name)
+
+                self.assertEqual(marker.read_text(encoding="utf-8"), "original", name)
+                self.assertEqual((dest / "SKILL.md").read_text(encoding="utf-8"), existing, name)
+
+    def test_bootstrap_new_yaml_failures_cannot_replace_existing_install(self) -> None:
+        bootstrap = load_module("bootstrap_new_yaml_atomic", BOOTSTRAP_SCRIPT)
+        long_blank_lines = "\n" * 1100
+        fixtures = {
+            "chomp-invalid": f"---\nname: chomp-invalid\ndescription: |+\n  a{long_blank_lines}---\n# Capelry\n",
+            "quoted-invalid": "---\nname: ' quoted-invalid '\ndescription: Valid description.\n---\n# Capelry\n",
+            "tab-invalid": "---\nname: tab-invalid\ndescription: true\t# documented\n---\n# Capelry\n",
+            "metadata-invalid": (
+                "---\nname: metadata-invalid\ndescription: Validate equivalent metadata keys.\n"
+                "metadata:\n  foo: one\n  'foo': two\n---\n# Capelry\n"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name, candidate_skill in fixtures.items():
+                archive = io.BytesIO()
+                member_name = f"repo-main/skills/{name}/SKILL.md"
+                with zipfile.ZipFile(archive, "w") as zf:
+                    zf.writestr(member_name, candidate_skill)
+                archive.seek(0)
+                dest = Path(tmpdir) / name
+                dest.mkdir()
+                existing = RegistryFixtureHandler.skill_md(name, "Existing valid skill. Use for rollback testing.")
+                (dest / "SKILL.md").write_text(existing, encoding="utf-8")
+                marker = dest / "preserve-me.txt"
+                marker.write_text("original", encoding="utf-8")
+                with zipfile.ZipFile(archive) as zf:
+                    source_path, rel_members = bootstrap.find_skill_source(zf, (f"skills/{name}",))
+                    with self.assertRaises(SystemExit, msg=name):
+                        bootstrap.install_source_path(zf, rel_members, source_path, dest, replace=True)
+
+                self.assertEqual(marker.read_text(encoding="utf-8"), "original", name)
+                self.assertEqual((dest / "SKILL.md").read_text(encoding="utf-8"), existing, name)
 
     def test_catalog_install_name_cannot_redirect_to_declared_skill_name(self) -> None:
         with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:

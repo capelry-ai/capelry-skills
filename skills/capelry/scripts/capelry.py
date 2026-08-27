@@ -1590,11 +1590,11 @@ def resolve_install_dest(args: argparse.Namespace, capability_name: str) -> Path
 
 
 def is_yaml_block_scalar(value: str) -> bool:
-    return bool(YAML_BLOCK_SCALAR_PATTERN.fullmatch(value.strip()))
+    return bool(YAML_BLOCK_SCALAR_PATTERN.fullmatch(strip_yaml_inline_comment(value)))
 
 
 def yaml_block_scalar_indent(value: str) -> int | None:
-    match = re.search(r"[1-9]", value)
+    match = re.search(r"[1-9]", strip_yaml_inline_comment(value))
     return int(match.group()) if match else None
 
 
@@ -1606,34 +1606,116 @@ def yaml_plain_scalar_has_forbidden_prefix(value: str) -> bool:
 
 def strip_yaml_inline_comment(value: str) -> str:
     value = value.strip()
-    quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
-    return value if quoted or " #" not in value else value.split(" #", 1)[0].rstrip()
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if quote == "'":
+            if char == "'" and index + 1 < len(value) and value[index + 1] == "'":
+                index += 2
+                continue
+            if char == "'":
+                quote = None
+        elif quote == '"':
+            if char == "\\" and index + 1 < len(value):
+                index += 2
+                continue
+            if char == '"':
+                quote = None
+        elif index == 0 and char in {"'", '"'}:
+            quote = char
+        elif char == "#" and (index == 0 or value[index - 1] in {" ", "\t"}):
+            return value[:index].rstrip(" \t")
+        index += 1
+    return value
 
 
-def valid_yaml_double_quoted(value: str) -> bool:
+def parse_yaml_double_quoted(value: str) -> str:
+    escapes = {
+        "0": "\0",
+        "a": "\a",
+        "b": "\b",
+        "t": "\t",
+        "n": "\n",
+        "v": "\v",
+        "f": "\f",
+        "r": "\r",
+        "e": "\x1b",
+        " ": " ",
+        '"': '"',
+        "/": "/",
+        "\\": "\\",
+        "N": "\x85",
+        "_": "\xa0",
+        "L": "\u2028",
+        "P": "\u2029",
+    }
     inner = value[1:-1]
+    result: list[str] = []
     index = 0
     while index < len(inner):
-        if inner[index] != "\\":
-            if inner[index] == '"':
-                return False
+        char = inner[index]
+        if char == '"':
+            raise ValueError("contains an unescaped double quote")
+        if char != "\\":
+            result.append(char)
             index += 1
             continue
         index += 1
         if index >= len(inner):
-            return False
+            raise ValueError("ends with an incomplete escape")
         escape = inner[index]
-        if escape in set('0abtnvfre /N_LP') | {'\\', '"'}:
+        if escape in escapes:
+            result.append(escapes[escape])
             index += 1
-        elif escape in "xuU":
-            width = {"x": 2, "u": 4, "U": 8}[escape]
-            digits = inner[index + 1 : index + 1 + width]
-            if len(digits) != width or not all(char in "0123456789abcdefABCDEF" for char in digits):
-                return False
-            index += width + 1
-        else:
-            return False
+            continue
+        if escape not in "xuU":
+            raise ValueError(f"contains unsupported escape \\{escape}")
+        width = {"x": 2, "u": 4, "U": 8}[escape]
+        digits = inner[index + 1 : index + 1 + width]
+        if len(digits) != width or not all(char in "0123456789abcdefABCDEF" for char in digits):
+            raise ValueError(f"contains an invalid \\{escape} escape")
+        codepoint = int(digits, 16)
+        if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+            raise ValueError(f"contains an invalid Unicode code point in \\{escape}")
+        result.append(chr(codepoint))
+        index += width + 1
+    return "".join(result)
+
+
+def valid_yaml_double_quoted(value: str) -> bool:
+    try:
+        parse_yaml_double_quoted(value)
+    except ValueError:
+        return False
     return True
+
+
+def split_yaml_mapping_entry(value: str) -> tuple[str, str] | None:
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if quote == "'":
+            if char == "'" and index + 1 < len(value) and value[index + 1] == "'":
+                index += 2
+                continue
+            if char == "'":
+                quote = None
+        elif quote == '"':
+            if char == "\\" and index + 1 < len(value):
+                index += 2
+                continue
+            if char == '"':
+                quote = None
+        elif char in {"'", '"'} and not value[:index].strip():
+            quote = char
+        elif char == ":" and (index + 1 == len(value) or value[index + 1].isspace()):
+            key = value[:index].strip()
+            item_value = value[index + 1 :].strip()
+            return (key, item_value) if key and item_value else None
+        index += 1
+    return None
 
 
 def parse_yaml_scalar(value: str) -> str:
@@ -1644,23 +1726,38 @@ def parse_yaml_scalar(value: str) -> str:
             raise ValueError("contains an unescaped apostrophe in a single-quoted YAML scalar; escape it as ''")
         return inner.replace("''", "'")
     if len(value) >= 2 and value[0] == value[-1] == '"':
-        try:
-            parsed = json.loads(value)
-            if isinstance(parsed, str):
-                return parsed
-        except json.JSONDecodeError:
-            return value[1:-1]
+        return parse_yaml_double_quoted(value)
     return value
 
 
+def render_yaml_block_scalar(marker: str, continuation: list[str]) -> str:
+    marker = strip_yaml_inline_comment(marker)
+    nonblank = [line for line in continuation if line.strip()]
+    explicit = yaml_block_scalar_indent(marker)
+    required = explicit or (len(nonblank[0]) - len(nonblank[0].lstrip()) if nonblank else 0)
+    content = [line[required:] if line.strip() else "" for line in continuation]
+    trailing_blank = 0
+    while content and not content[-1]:
+        trailing_blank += 1
+        content.pop()
+    separator = "\n" if marker.startswith("|") else " "
+    rendered = separator.join(content)
+    if content:
+        rendered += "\n" * (trailing_blank + 1)
+    elif continuation:
+        rendered = "\n" * len(continuation)
+    if "-" in marker:
+        return rendered.rstrip("\n")
+    if "+" in marker:
+        return rendered
+    clipped = rendered.rstrip("\n")
+    return f"{clipped}\n" if clipped else ""
+
+
 def frontmatter_value(raw: str, continuation: list[str]) -> str:
-    marker = raw.strip()
+    marker = strip_yaml_inline_comment(raw)
     if is_yaml_block_scalar(marker):
-        nonblank = [line for line in continuation if line.strip()]
-        explicit = yaml_block_scalar_indent(marker)
-        required = explicit or (len(nonblank[0]) - len(nonblank[0].lstrip()) if nonblank else 0)
-        content = [line[required:] for line in continuation]
-        return ("\n" if marker.startswith("|") else " ").join(content).rstrip("\n")
+        return render_yaml_block_scalar(marker, continuation)
     content = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
     value = parse_yaml_scalar(marker)
     if content:
@@ -1715,9 +1812,15 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
     current_key: str | None = None
     field_pattern = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?:\s*(?P<value>.*))?$")
     for line_number, line in enumerate(lines[1:closing], start=2):
-        if not line.strip() or line.lstrip().startswith("#"):
+        if not line.strip():
             if current_key is not None:
                 raw_fields[current_key][1].append(line)
+            continue
+        if line.lstrip().startswith("#"):
+            if line.startswith((" ", "\t")) and current_key is not None:
+                raw_value, continuation = raw_fields[current_key]
+                if is_yaml_block_scalar(raw_value):
+                    continuation.append(line)
             continue
         if line.startswith((" ", "\t")):
             if current_key is None:
@@ -1833,12 +1936,12 @@ def validate_metadata_mapping(
         elif indent != entry_indent:
             errors.append("metadata must be a flat string-to-string mapping with consistent indentation")
             return
-        match = re.fullmatch(r"(?P<key>[^:#][^:]*):\s+(?P<value>.+)", stripped)
-        if not match:
+        item = split_yaml_mapping_entry(stripped)
+        if item is None:
             errors.append("metadata must contain string key/value entries")
             return
-        key = match.group("key").strip()
-        value = strip_yaml_inline_comment(match.group("value"))
+        key, item_value = item
+        value = strip_yaml_inline_comment(item_value)
         key_quoted = len(key) >= 2 and key[0] == key[-1] and key[0] in {"'", '"'}
         invalid_key_single = key_quoted and key.startswith("'") and "'" in key[1:-1].replace("''", "")
         invalid_key_double = False
@@ -1853,10 +1956,15 @@ def validate_metadata_mapping(
         if invalid_key_single or invalid_key_double or invalid_key_plain or mismatched_key_quote:
             errors.append(f"metadata key '{key}' must be a YAML string scalar")
             return
-        if key in seen:
-            errors.append(f"metadata key '{key}' is declared more than once")
+        try:
+            resolved_key = parse_yaml_scalar(key)
+        except ValueError:
+            errors.append(f"metadata key '{key}' must be a YAML string scalar")
             return
-        seen.add(key)
+        if resolved_key in seen:
+            errors.append(f"metadata key '{resolved_key}' is declared more than once")
+            return
+        seen.add(resolved_key)
         quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
         invalid_single_quote = quoted and value.startswith("'") and "'" in value[1:-1].replace("''", "")
         invalid_double_quote = False
