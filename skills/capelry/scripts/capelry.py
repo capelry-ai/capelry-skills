@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 CAPELRY_SKILL_VERSION = "2.1.0"
@@ -232,7 +232,7 @@ AGENT_SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 YAML_NON_STRING_PLAIN_PATTERN = re.compile(
     r"^[+-]?(?:[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?|"
     r"[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9_]+)?|"
-    r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.(?:inf|nan)|"
+    r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.(?:[0-9_]+(?:[eE][+-]?[0-9_]+)?|inf|nan)|"
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?)$",
     re.IGNORECASE,
 )
@@ -1353,7 +1353,7 @@ def normalized_archive_path(filename: str) -> PurePosixPath:
         "\x00" in normalized
         or path.is_absolute()
         or ".." in path.parts
-        or (path.parts and path.parts[0].endswith(":"))
+        or any(PureWindowsPath(part).drive for part in path.parts)
     ):
         raise SystemExit(f"Unsafe archive path: {filename}")
     return path
@@ -1828,7 +1828,14 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
             if line.startswith((" ", "\t")) and current_key is not None:
                 raw_value, continuation = raw_fields[current_key]
                 if is_yaml_block_scalar(raw_value):
-                    continuation.append(line)
+                    explicit = yaml_block_scalar_indent(raw_value)
+                    prior = [item for item in continuation if item.strip()]
+                    required = explicit or (
+                        len(prior[0]) - len(prior[0].lstrip(" \t")) if prior else None
+                    )
+                    indent = len(line) - len(line.lstrip(" \t"))
+                    if required is None or indent >= required:
+                        continuation.append(line)
             continue
         if line.startswith((" ", "\t")):
             if current_key is None:

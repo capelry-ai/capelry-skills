@@ -966,6 +966,9 @@ class CapelryScriptTests(unittest.TestCase):
             ("bad-scalar", "123"),
             ("123", "Numeric names must be quoted even when the directory is numeric"),
             ("bad-scalar", "2026-08-27"),
+            ("bad-scalar", ".1"),
+            ("bad-scalar", "+.1"),
+            ("bad-scalar", "-.1"),
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             for index, (name, description) in enumerate(fixtures):
@@ -1187,7 +1190,7 @@ class CapelryScriptTests(unittest.TestCase):
                 self.assertEqual(bootstrap_report["descriptionLength"], expected_length)
 
             skill_file.write_text(
-                "---\nname: chomping-skill\ndescription: |\n  a\n# top-level YAML comment\n---\n# Body\n",
+                "---\nname: chomping-skill\ndescription: |\n  a\n # outdented YAML comment\n---\n# Body\n",
                 encoding="utf-8",
             )
             self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
@@ -1606,6 +1609,13 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Unsafe archive path", result.stderr)
             self.assertFalse(dest.exists())
+
+    def test_archive_paths_reject_windows_drive_relative_members(self) -> None:
+        capelry = load_module("capelry_drive_relative_archive", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_drive_relative_archive", BOOTSTRAP_SCRIPT)
+        for module in (capelry, bootstrap):
+            with self.assertRaisesRegex(SystemExit, "Unsafe archive path"):
+                module.normalized_archive_path("root/C:payload")
 
     def test_ard_zip_install_rejects_backslash_traversal(self) -> None:
         with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:

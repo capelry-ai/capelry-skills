@@ -25,7 +25,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Iterable
 
 DEFAULT_SOURCE_REPOSITORY = "https://github.com/capelry-ai/capelry-skills"
@@ -87,7 +87,7 @@ SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 YAML_NON_STRING_PLAIN_PATTERN = re.compile(
     r"^[+-]?(?:[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?|"
     r"[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9_]+)?|"
-    r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.(?:inf|nan)|"
+    r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.(?:[0-9_]+(?:[eE][+-]?[0-9_]+)?|inf|nan)|"
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?)$",
     re.IGNORECASE,
 )
@@ -157,7 +157,7 @@ def normalized_archive_path(filename: str) -> PurePosixPath:
         "\x00" in normalized
         or path.is_absolute()
         or ".." in path.parts
-        or (path.parts and path.parts[0].endswith(":"))
+        or any(PureWindowsPath(part).drive for part in path.parts)
     ):
         raise SystemExit(f"Unsafe archive path: {filename}")
     return path
@@ -395,10 +395,12 @@ def validate_frontmatter_structure(lines: list[str]) -> None:
     for line_number, line in enumerate(lines, start=2):
         if not line.strip():
             continue
-        if line.lstrip().startswith("#") and (
-            not line.startswith((" ", "\t")) or not is_yaml_block_scalar(current_value)
-        ):
-            continue
+        if line.lstrip().startswith("#"):
+            if not line.startswith((" ", "\t")) or not is_yaml_block_scalar(current_value):
+                continue
+            indent = len(line) - len(line.lstrip(" \t"))
+            if block_indent is not None and indent < block_indent:
+                continue
         if line.startswith((" ", "\t")):
             if current_key is None:
                 raise SystemExit(f"Installed SKILL.md frontmatter line {line_number} is indented without a field")
@@ -449,6 +451,14 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
             if following and not following.startswith((" ", "\t")):
                 break
             if is_yaml_block_scalar(value):
+                if following.lstrip().startswith("#"):
+                    nonblank = [item for item in continuation if item.strip()]
+                    required = yaml_block_scalar_indent(value) or (
+                        len(nonblank[0]) - len(nonblank[0].lstrip(" \t")) if nonblank else None
+                    )
+                    indent = len(following) - len(following.lstrip(" \t"))
+                    if required is not None and indent < required:
+                        continue
                 continuation.append(following)
             elif following.strip() and not following.lstrip().startswith("#"):
                 continuation.append(following)
