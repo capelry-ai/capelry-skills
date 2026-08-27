@@ -318,6 +318,7 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
                         "com.capelry.slug": "capelry-ai/capelry-skills/source-skill",
                         "com.capelry.catalogPath": "capelry-ai/capelry-skills",
                         "com.capelry.catalogSlug": "capelry-skills",
+                        "com.capelry.archiveChecksumSha256": hashlib.sha256(self.source_skill_zip()).hexdigest(),
                     },
                 }
             )
@@ -1977,9 +1978,35 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertTrue((dest / "SKILL.md").exists())
             self.assertEqual(payload["installedFrom"], "ARD source archive descriptor at fixture-ref")
             self.assertEqual(payload["mediaType"], "application/vnd.capelry.skill-source+json")
+            self.assertEqual(payload["checksumSha256"], hashlib.sha256(RegistryFixtureHandler.source_skill_zip()).hexdigest())
             self.assertTrue(payload["validation"]["valid"])
             self.assertEqual(payload["validation"]["path"], str(dest / "SKILL.md"))
             self.assertIn("Reload or restart", payload["next"])
+
+    def test_source_archive_checksum_mismatch_preserves_existing_install(self) -> None:
+        capelry = load_module("capelry_source_checksum", CAPELRY_SCRIPT)
+        entry = {
+            "type": "application/vnd.capelry.skill-source+json",
+            "data": {
+                "archiveUrl": "https://example.invalid/source.zip",
+                "path": "skills/source-skill",
+                "ref": "fixture-ref",
+                "archiveChecksumSha256": "0" * 64,
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest = Path(tmpdir) / "source-skill"
+            dest.mkdir()
+            existing = RegistryFixtureHandler.skill_md("source-skill", "Existing valid skill. Use for checksum rollback testing.")
+            (dest / "SKILL.md").write_text(existing, encoding="utf-8")
+            marker = dest / "preserve-me.txt"
+            marker.write_text("original", encoding="utf-8")
+            args = SimpleNamespace(dest=str(dest), name=None, target="agents-project", force=True)
+            with mock.patch.object(capelry, "fetch_bytes", return_value=RegistryFixtureHandler.source_skill_zip()):
+                with self.assertRaisesRegex(SystemExit, "Archive SHA-256 mismatch"):
+                    capelry.install_ard_entry_for_args(entry, args, "source-skill")
+            self.assertEqual(marker.read_text(encoding="utf-8"), "original")
+            self.assertEqual((dest / "SKILL.md").read_text(encoding="utf-8"), existing)
 
     def test_ard_install_refuses_unsupported_media_type_with_guidance(self) -> None:
         with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:

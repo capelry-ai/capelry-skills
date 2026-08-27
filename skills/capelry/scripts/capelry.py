@@ -2220,9 +2220,16 @@ def source_descriptor_value(descriptor: dict[str, Any], entry: dict[str, Any], *
     return ard_metadata_string(entry, *keys)
 
 
-def download_archive_source_path(archive_url: str, source_path_value: str, dest: Path, force: bool) -> None:
+def download_archive_source_path(
+    archive_url: str,
+    source_path_value: str,
+    dest: Path,
+    force: bool,
+    expected_checksum: str | None,
+) -> str:
     source_path_value = normalize_github_source_path(source_path_value)
     archive = fetch_bytes(archive_url)
+    checksum = verify_archive_checksum(archive, expected_checksum)
     with zipfile.ZipFile(io.BytesIO(archive)) as zf:
         rel_members = github_archive_rel_members(zf)
         skill_marker = f"{source_path_value}/SKILL.md" if source_path_value else "SKILL.md"
@@ -2243,6 +2250,7 @@ def download_archive_source_path(archive_url: str, source_path_value: str, dest:
     if not (dest / "SKILL.md").exists():
         shutil.rmtree(dest, ignore_errors=True)
         raise SystemExit("Source archive install completed but did not produce SKILL.md")
+    return checksum
 
 
 def ard_source_descriptor(entry: dict[str, Any]) -> dict[str, Any]:
@@ -2296,23 +2304,37 @@ def install_ard_zip_entry(entry: dict[str, Any], dest: Path, force: bool) -> tup
     return "ARD skill zip", checksum
 
 
-def install_ard_source_entry(entry: dict[str, Any], dest: Path, force: bool) -> str:
+def install_ard_source_entry(entry: dict[str, Any], dest: Path, force: bool) -> tuple[str, str | None]:
     descriptor = ard_source_descriptor(entry)
     archive_url = source_descriptor_value(descriptor, entry, "archiveUrl", "com.capelry.sourceArchiveUrl")
     source_path_value = source_descriptor_value(descriptor, entry, "path", "sourcePath", "com.capelry.sourcePath", "metadata.com.capelry.sourcePath") or ""
     ref = source_descriptor_value(descriptor, entry, "ref", "sourceRef", "defaultBranch", "com.capelry.sourceRef", "metadata.com.capelry.sourceRef") or "main"
     repository = source_descriptor_value(descriptor, entry, "repository", "sourceRepository", "com.capelry.sourceRepository", "metadata.com.capelry.sourceRepository")
+    archive_checksum = source_descriptor_value(
+        descriptor,
+        entry,
+        "archiveChecksumSha256",
+        "checksumSha256",
+        "com.capelry.sourceArchiveChecksumSha256",
+        "metadata.com.capelry.sourceArchiveChecksumSha256",
+    ) or ard_archive_checksum(entry)
 
     if archive_url:
-        download_archive_source_path(archive_url, source_path_value, dest, force)
-        return f"ARD source archive descriptor at {ref}"
+        checksum = download_archive_source_path(
+            archive_url,
+            source_path_value,
+            dest,
+            force,
+            archive_checksum,
+        )
+        return f"ARD source archive descriptor at {ref}", checksum
 
     if repository:
         parts = github_parts(repository)
         if parts:
             owner, repo = parts
             download_github_archive_path(owner, repo, source_path_value, ref, dest, force)
-            return f"ARD GitHub source descriptor at {ref}"
+            return f"ARD GitHub source descriptor at {ref}", None
 
     raise SystemExit("ARD source entry did not include a supported GitHub repository or source archive descriptor")
 
@@ -2329,7 +2351,7 @@ def install_ard_entry(entry: dict[str, Any], dest: Path, force: bool) -> tuple[s
         installed_from, checksum = install_ard_zip_entry(entry, dest, force)
         return installed_from, checksum
     if media_type == "application/vnd.capelry.skill-source+json":
-        return install_ard_source_entry(entry, dest, force), None
+        return install_ard_source_entry(entry, dest, force)
     raise SystemExit(unsupported_ard_install_message(entry))
 
 
