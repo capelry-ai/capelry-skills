@@ -261,7 +261,9 @@ def validate_frontmatter_structure(lines: list[str]) -> None:
     current_value = ""
     block_indent: int | None = None
     for line_number, line in enumerate(lines, start=2):
-        if not line.strip() or line.lstrip().startswith("#"):
+        if not line.strip():
+            continue
+        if line.lstrip().startswith("#") and not is_yaml_block_scalar(current_value):
             continue
         if line.startswith((" ", "\t")):
             if current_key is None:
@@ -310,7 +312,7 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
         for following in lines[index + 1 :]:
             if following and not following.startswith((" ", "\t")):
                 break
-            if following.strip() and not following.lstrip().startswith("#"):
+            if following.strip() and (is_yaml_block_scalar(value) or not following.lstrip().startswith("#")):
                 continuation.append(following.strip())
         if value and not is_yaml_block_scalar(value):
             if continuation:
@@ -428,11 +430,14 @@ def validate_skill_directory(skill_dir: Path, expected_name: str) -> dict[str, s
         text = skill_file.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
         raise SystemExit(f"Installed skill has no readable UTF-8 SKILL.md: {error}") from error
-    lines = text.lstrip("\ufeff").splitlines()
-    if not lines or lines[0].strip() != "---":
+    clean_text = text.lstrip("\ufeff")
+    if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", clean_text):
+        raise SystemExit("Installed SKILL.md contains YAML-forbidden control characters")
+    lines = clean_text.splitlines()
+    if not lines or lines[0] != "---":
         raise SystemExit("Installed SKILL.md must start with YAML frontmatter delimited by ---")
     try:
-        closing = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+        closing = next(index for index, line in enumerate(lines[1:], start=1) if line == "---")
     except StopIteration as error:
         raise SystemExit("Installed SKILL.md frontmatter is missing its closing --- delimiter") from error
     frontmatter = lines[1:closing]

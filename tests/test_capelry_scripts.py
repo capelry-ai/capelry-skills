@@ -78,7 +78,8 @@ class RegistryFixtureHandler(BaseHTTPRequestHandler):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as zf:
             for name, content in entries.items():
-                zf.writestr(name, content)
+                member = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                zf.writestr(member, content)
         return archive.getvalue()
 
     @staticmethod
@@ -1007,6 +1008,24 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertIn("cannot continue non-block scalar", " ".join(report["errors"]))
             with self.assertRaisesRegex(SystemExit, "cannot continue a non-block scalar"):
                 bootstrap.validate_skill_directory(skill_dir, "continuation-skill")
+
+    def test_skill_validators_enforce_frontmatter_lexical_rules(self) -> None:
+        capelry = load_module("capelry_lexical_validation", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_lexical_validation", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "lexical-skill"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            fixtures = (
+                "---\nname: lexical-skill\ndescription: |\n  valid\n  ---\ncompatibility:\n  - linux\n---\n# Body\n",
+                "---\nname: lexical-skill\ndescription: |\n  ok\n  #" + "x" * 1025 + "\n---\n# Body\n",
+                "---\nname: lexical-skill\ndescription: ok\x00bad\n---\n# Body\n",
+            )
+            for fixture in fixtures:
+                skill_file.write_text(fixture, encoding="utf-8")
+                self.assertFalse(capelry.validate_skill_directory(skill_dir)["valid"])
+                with self.assertRaises(SystemExit):
+                    bootstrap.validate_skill_directory(skill_dir, "lexical-skill")
 
     def test_skill_validators_reject_forbidden_plain_scalar_prefixes(self) -> None:
         capelry = load_module("capelry_forbidden_prefix_validation", CAPELRY_SCRIPT)

@@ -1629,9 +1629,10 @@ def parse_yaml_scalar(value: str) -> str:
 
 def frontmatter_value(raw: str, continuation: list[str]) -> str:
     marker = raw.strip()
-    content = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
     if is_yaml_block_scalar(marker):
+        content = [line.strip() for line in continuation if line.strip()]
         return ("\n" if marker.startswith("|") else " ").join(content).strip()
+    content = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
     value = parse_yaml_scalar(marker)
     if content:
         suffix = " ".join(content)
@@ -1642,7 +1643,7 @@ def frontmatter_value(raw: str, continuation: list[str]) -> str:
 def block_scalar_indentation_error(marker: str, continuation: list[str]) -> str | None:
     required_indent = yaml_block_scalar_indent(marker)
     for line in continuation:
-        if not line.strip() or line.lstrip().startswith("#"):
+        if not line.strip():
             continue
         prefix = line[: len(line) - len(line.lstrip(" \t"))]
         if "\t" in prefix:
@@ -1656,10 +1657,13 @@ def block_scalar_indentation_error(marker: str, continuation: list[str]) -> str 
 
 
 def parse_skill_frontmatter(text: str) -> dict[str, Any]:
-    lines = text.lstrip("\ufeff").splitlines()
+    clean_text = text.lstrip("\ufeff")
+    lines = clean_text.splitlines()
     errors: list[str] = []
     warnings: list[str] = []
-    if not lines or lines[0].strip() != "---":
+    if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", clean_text):
+        return {"fields": {}, "rawFields": {}, "body": "", "errors": ["SKILL.md contains YAML-forbidden control characters"], "warnings": warnings}
+    if not lines or lines[0] != "---":
         return {
             "fields": {},
             "rawFields": {},
@@ -1668,7 +1672,7 @@ def parse_skill_frontmatter(text: str) -> dict[str, Any]:
             "warnings": warnings,
         }
     try:
-        closing = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+        closing = next(index for index, line in enumerate(lines[1:], start=1) if line == "---")
     except StopIteration:
         return {
             "fields": {},
