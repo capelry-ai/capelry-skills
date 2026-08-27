@@ -230,7 +230,8 @@ TARGETS: dict[str, dict[str, str]] = {
 TARGET_ROOTS = {name: details["root"] for name, details in TARGETS.items()}
 AGENT_SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 YAML_NON_STRING_PLAIN_PATTERN = re.compile(
-    r"^[+-]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9_]+)?|"
+    r"^[+-]?(?:[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?|"
+    r"[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9_]+)?|"
     r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.(?:inf|nan)|"
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?)$",
     re.IGNORECASE,
@@ -1784,7 +1785,14 @@ def block_scalar_indentation_error(marker: str, continuation: list[str]) -> str 
 
 def parse_skill_frontmatter(text: str) -> dict[str, Any]:
     clean_text = text.lstrip("\ufeff")
-    lines = clean_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = (
+        clean_text.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\x85", "\n")
+        .replace("\u2028", "\n")
+        .replace("\u2029", "\n")
+        .split("\n")
+    )
     errors: list[str] = []
     warnings: list[str] = []
     if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ufffe\uffff]", clean_text):

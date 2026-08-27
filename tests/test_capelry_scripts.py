@@ -1025,13 +1025,53 @@ class CapelryScriptTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, "YAML-forbidden control characters"):
                     bootstrap.validate_skill_directory(skill_dir, "c1-controls")
 
-            allowed = '---\r\nname: c1-controls\r\ndescription: "a\u0085b"\r\n---\r\n# Body\r\n'
-            skill_file.write_text(allowed, encoding="utf-8", newline="")
+            allowed = "---\u0085name: c1-controls\u0085description: abc\u0085---\u0085# Body\u0085"
+            skill_file.write_text(allowed, encoding="utf-8")
             report = capelry.validate_skill_directory(skill_dir)
             bootstrap_report = bootstrap.validate_skill_directory(skill_dir, "c1-controls")
             self.assertTrue(report["valid"])
             self.assertEqual(report["descriptionLength"], 3)
             self.assertEqual(bootstrap_report["descriptionLength"], 3)
+
+    def test_skill_validators_normalize_all_yaml_line_breaks(self) -> None:
+        capelry = load_module("capelry_yaml_line_breaks", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_yaml_line_breaks", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "yaml-breaks"
+            skill_dir.mkdir()
+            for line_break in ("\u0085", "\u2028", "\u2029"):
+                text = line_break.join((
+                    "---", "name: yaml-breaks", "description: ok # documented",
+                    "compatibility:", "  - linux", "---", "# Body", "",
+                ))
+                (skill_dir / "SKILL.md").write_text(text, encoding="utf-8")
+                report = capelry.validate_skill_directory(skill_dir)
+                self.assertFalse(report["valid"], hex(ord(line_break)))
+                self.assertIn("must be a string, not a sequence or mapping", " ".join(report["errors"]))
+                with self.assertRaisesRegex(SystemExit, "must be a string, not a sequence or mapping"):
+                    bootstrap.validate_skill_directory(skill_dir, "yaml-breaks")
+
+    def test_skill_validators_reject_yaml_11_sexagesimal_scalars(self) -> None:
+        capelry = load_module("capelry_sexagesimal", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_sexagesimal", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "sexagesimal"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            for fields in (
+                "description: 1:20\n",
+                "description: Valid description.\nlicense: 12:34:56\n",
+                "description: Valid description.\nmetadata:\n  owner: 1:20.5\n",
+            ):
+                skill_file.write_text(f"---\nname: sexagesimal\n{fields}---\n# Body\n", encoding="utf-8")
+                self.assertFalse(capelry.validate_skill_directory(skill_dir)["valid"], fields)
+                with self.assertRaisesRegex(SystemExit, "must be a YAML string"):
+                    bootstrap.validate_skill_directory(skill_dir, "sexagesimal")
+            skill_file.write_text(
+                '---\nname: sexagesimal\ndescription: "1:20"\n---\n# Body\n', encoding="utf-8"
+            )
+            self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
+            bootstrap.validate_skill_directory(skill_dir, "sexagesimal")
 
     def test_optional_scalar_fields_require_explicit_string_values(self) -> None:
         capelry = load_module("capelry_empty_optional_scalars", CAPELRY_SCRIPT)
@@ -1741,6 +1781,8 @@ class CapelryScriptTests(unittest.TestCase):
             "c1-invalid": "---\nname: c1-invalid\ndescription: invalid\u0080control\n---\n# Body\n",
             "empty-optional": "---\nname: empty-optional\ndescription: Valid description.\nlicense: # documented\n---\n# Body\n",
             "empty-metadata": "---\nname: empty-metadata\ndescription: Valid description.\nmetadata:\n  owner: # documented\n---\n# Body\n",
+            "nel-invalid": "---\u0085name: nel-invalid\u0085description: ok # documented\u0085compatibility:\u0085  - linux\u0085---\u0085# Body\u0085",
+            "sexagesimal": "---\nname: sexagesimal\ndescription: 1:20\n---\n# Body\n",
             "metadata-invalid": (
                 "---\nname: metadata-invalid\ndescription: Validate equivalent metadata keys.\n"
                 "metadata:\n  foo: one\n  'foo': two\n---\n# Body\n"
@@ -1780,6 +1822,8 @@ class CapelryScriptTests(unittest.TestCase):
             "c1-invalid": "---\nname: c1-invalid\ndescription: invalid\u0080control\n---\n# Capelry\n",
             "empty-optional": "---\nname: empty-optional\ndescription: Valid description.\nlicense: # documented\n---\n# Capelry\n",
             "empty-metadata": "---\nname: empty-metadata\ndescription: Valid description.\nmetadata:\n  owner: # documented\n---\n# Capelry\n",
+            "nel-invalid": "---\u0085name: nel-invalid\u0085description: ok # documented\u0085compatibility:\u0085  - linux\u0085---\u0085# Capelry\u0085",
+            "sexagesimal": "---\nname: sexagesimal\ndescription: 1:20\n---\n# Capelry\n",
             "metadata-invalid": (
                 "---\nname: metadata-invalid\ndescription: Validate equivalent metadata keys.\n"
                 "metadata:\n  foo: one\n  'foo': two\n---\n# Capelry\n"
