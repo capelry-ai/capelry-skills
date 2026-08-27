@@ -476,6 +476,10 @@ def frontmatter_scalar(lines: list[str], key: str) -> str | None:
                 raise SystemExit(f"Installed SKILL.md field '{key}' must be a YAML string")
             return yaml_scalar(value)
         if not continuation:
+            if not value:
+                raise SystemExit(
+                    f"Installed SKILL.md field '{key}' must be a YAML string scalar; quote an empty string explicitly"
+                )
             return ""
         if not value and any(line.startswith("- ") or re.match(r"^[^:#]+:\s", line) for line in continuation):
             raise SystemExit(f"Installed SKILL.md field '{key}' must be a string, not a sequence or mapping")
@@ -518,6 +522,8 @@ def validate_metadata_mapping(lines: list[str]) -> None:
                 raise SystemExit("Installed SKILL.md metadata must contain string key/value entries")
             key, item_value = item
             value = strip_yaml_inline_comment(item_value)
+            if not value:
+                raise SystemExit(f"Installed SKILL.md metadata value for '{key}' must be a YAML string scalar")
             key_quoted = len(key) >= 2 and key[0] == key[-1] and key[0] in {"'", '"'}
             invalid_key_single = key_quoted and key.startswith("'") and "'" in key[1:-1].replace("''", "")
             invalid_key_double = False

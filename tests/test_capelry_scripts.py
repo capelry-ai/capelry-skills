@@ -1033,6 +1033,59 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertEqual(report["descriptionLength"], 3)
             self.assertEqual(bootstrap_report["descriptionLength"], 3)
 
+    def test_optional_scalar_fields_require_explicit_string_values(self) -> None:
+        capelry = load_module("capelry_empty_optional_scalars", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_empty_optional_scalars", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "empty-optional"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            for field, raw in (("license", ""), ("license", "# documented"), ("compatibility", ""), ("allowed-tools", "# documented")):
+                skill_file.write_text(
+                    "---\nname: empty-optional\ndescription: Validate optional scalar values.\n"
+                    f"{field}: {raw}\n---\n# Body\n",
+                    encoding="utf-8",
+                )
+                report = capelry.validate_skill_directory(skill_dir)
+                self.assertFalse(report["valid"], (field, raw))
+                self.assertIn(f"frontmatter field '{field}' must be a YAML string scalar", " ".join(report["errors"]))
+                with self.assertRaisesRegex(SystemExit, f"field '{field}' must be a YAML string scalar"):
+                    bootstrap.validate_skill_directory(skill_dir, "empty-optional")
+
+            for explicit in ('""', "''", "|-\n"):
+                skill_file.write_text(
+                    "---\nname: empty-optional\ndescription: Validate optional scalar values.\n"
+                    f"license: {explicit}\n---\n# Body\n",
+                    encoding="utf-8",
+                )
+                self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"], explicit)
+                bootstrap.validate_skill_directory(skill_dir, "empty-optional")
+
+    def test_metadata_values_require_explicit_string_values(self) -> None:
+        capelry = load_module("capelry_empty_metadata_values", CAPELRY_SCRIPT)
+        bootstrap = load_module("bootstrap_empty_metadata_values", BOOTSTRAP_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "empty-metadata"
+            skill_dir.mkdir()
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text(
+                "---\nname: empty-metadata\ndescription: Validate metadata values.\n"
+                "metadata:\n  owner: # documented\n---\n# Body\n",
+                encoding="utf-8",
+            )
+            report = capelry.validate_skill_directory(skill_dir)
+            self.assertFalse(report["valid"])
+            self.assertIn("metadata value for 'owner' must be a YAML string scalar", report["errors"])
+            with self.assertRaisesRegex(SystemExit, "metadata value for 'owner' must be a YAML string scalar"):
+                bootstrap.validate_skill_directory(skill_dir, "empty-metadata")
+
+            skill_file.write_text(
+                '---\nname: empty-metadata\ndescription: Validate metadata values.\nmetadata:\n  owner: "" # explicit string\n---\n# Body\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(capelry.validate_skill_directory(skill_dir)["valid"])
+            bootstrap.validate_skill_directory(skill_dir, "empty-metadata")
+
     def test_skill_validators_reject_non_block_scalar_continuations(self) -> None:
         capelry = load_module("capelry_continuation_validation", CAPELRY_SCRIPT)
         bootstrap = load_module("bootstrap_continuation_validation", BOOTSTRAP_SCRIPT)
@@ -1686,6 +1739,8 @@ class CapelryScriptTests(unittest.TestCase):
             "tab-invalid": "---\nname: tab-invalid\ndescription: true\t# documented\n---\n# Body\n",
             "terminal-colon": "---\nname: terminal-colon\ndescription: invalid:\n---\n# Body\n",
             "c1-invalid": "---\nname: c1-invalid\ndescription: invalid\u0080control\n---\n# Body\n",
+            "empty-optional": "---\nname: empty-optional\ndescription: Valid description.\nlicense: # documented\n---\n# Body\n",
+            "empty-metadata": "---\nname: empty-metadata\ndescription: Valid description.\nmetadata:\n  owner: # documented\n---\n# Body\n",
             "metadata-invalid": (
                 "---\nname: metadata-invalid\ndescription: Validate equivalent metadata keys.\n"
                 "metadata:\n  foo: one\n  'foo': two\n---\n# Body\n"
@@ -1723,6 +1778,8 @@ class CapelryScriptTests(unittest.TestCase):
             "tab-invalid": "---\nname: tab-invalid\ndescription: true\t# documented\n---\n# Capelry\n",
             "terminal-colon": "---\nname: terminal-colon\ndescription: invalid:\n---\n# Capelry\n",
             "c1-invalid": "---\nname: c1-invalid\ndescription: invalid\u0080control\n---\n# Capelry\n",
+            "empty-optional": "---\nname: empty-optional\ndescription: Valid description.\nlicense: # documented\n---\n# Capelry\n",
+            "empty-metadata": "---\nname: empty-metadata\ndescription: Valid description.\nmetadata:\n  owner: # documented\n---\n# Capelry\n",
             "metadata-invalid": (
                 "---\nname: metadata-invalid\ndescription: Validate equivalent metadata keys.\n"
                 "metadata:\n  foo: one\n  'foo': two\n---\n# Capelry\n"

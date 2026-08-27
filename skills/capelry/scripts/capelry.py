@@ -1903,6 +1903,8 @@ def validate_scalar_shape(
         meaningful = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
         if any(line.startswith("- ") or re.match(r"^[^:#]+:\s", line) for line in meaningful):
             errors.append(f"frontmatter field '{key}' must be a string, not a sequence or mapping")
+        else:
+            errors.append(f"frontmatter field '{key}' must be a YAML string scalar; quote an empty string explicitly")
 
 
 def validate_metadata_mapping(
@@ -1942,6 +1944,9 @@ def validate_metadata_mapping(
             return
         key, item_value = item
         value = strip_yaml_inline_comment(item_value)
+        if not value:
+            errors.append(f"metadata value for '{key}' must be a YAML string scalar")
+            return
         key_quoted = len(key) >= 2 and key[0] == key[-1] and key[0] in {"'", '"'}
         invalid_key_single = key_quoted and key.startswith("'") and "'" in key[1:-1].replace("''", "")
         invalid_key_double = False
