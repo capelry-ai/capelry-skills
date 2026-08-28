@@ -1,0 +1,3 @@
+# PR 20 review-remediation plan — round 11
+
+Initial exact head `a1c49a2387e291b26ece68036c49417a37f56afc`; 29 threads, 26 resolved/excluded, 3 unresolved. Fix `PRRT_kwDOSR0Wxs6c-JSr` by rejecting Windows drive-qualified archive segments/final relative members, `PRRT_kwDOSR0Wxs6c-JS0` by covering signed leading-dot YAML floats, and `PRRT_kwDOSR0Wxs6c-JS5` by ignoring hash comments outdented from an established block scalar in both validators. Preserve all 70 prior tests; add focused archive/scalar/comment regressions, run full gates, commit/push normally, reply only after exact PR-head verification, await CI, resolve after rechecks, and run an all-pages closure scan.

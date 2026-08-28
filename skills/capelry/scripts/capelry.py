@@ -18,10 +18,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
-CAPELRY_SKILL_VERSION = "2.0.9"
+CAPELRY_SKILL_VERSION = "2.1.0"
 DEFAULT_REGISTRY = "https://capelry.com"
 SELF_GITHUB_REPOSITORY = "capelry-ai/capelry-skills"
 SELF_SOURCE_PATH = "skills/capelry"
@@ -54,15 +54,197 @@ ARD_SOURCE_REPOSITORY_FULL_NAME_METADATA = "com.capelry.sourceRepositoryFullName
 DEFAULT_HTTP_USER_AGENT = "capelry-client"
 HTTP_USER_AGENT = DEFAULT_HTTP_USER_AGENT
 
-TARGET_ROOTS = {
-    "agents-project": ".agents/skills",
-    "pi-project": ".pi/skills",
-    "claude-project": ".claude/skills",
-    "codex-project": ".codex/skills",
-    "agents-global": "~/.agents/skills",
-    "pi-global": "~/.pi/agent/skills",
-    "claude-global": "~/.claude/skills",
-    "codex-global": "~/.codex/skills",
+TARGETS: dict[str, dict[str, str]] = {
+    "agents-project": {
+        "root": ".agents/skills",
+        "harness": "Portable Agent Skills",
+        "aliases": "codex pi opencode gemini cursor copilot vscode roo junie factory openhands",
+        "scope": "project",
+        "next": "Reload or restart the active harness, then confirm {name} appears in its skills list.",
+    },
+    "agents-global": {
+        "root": "~/.agents/skills",
+        "harness": "Portable Agent Skills",
+        "aliases": "codex pi opencode gemini cursor copilot vscode roo junie factory openhands",
+        "scope": "global",
+        "next": "Reload or restart the active harness, then confirm {name} appears in its skills list.",
+    },
+    "pi-project": {
+        "root": ".pi/skills",
+        "harness": "Pi",
+        "scope": "project",
+        "next": "In Pi, run /reload and then /skill:{name}.",
+    },
+    "pi-global": {
+        "root": "~/.pi/agent/skills",
+        "harness": "Pi",
+        "scope": "global",
+        "next": "In Pi, run /reload and then /skill:{name}.",
+    },
+    "claude-project": {
+        "root": ".claude/skills",
+        "harness": "Claude Code",
+        "scope": "project",
+        "next": "In Claude Code, invoke /{name}; restart only if the .claude/skills directory was created after startup.",
+    },
+    "claude-global": {
+        "root": "~/.claude/skills",
+        "harness": "Claude Code",
+        "scope": "global",
+        "next": "In Claude Code, invoke /{name}; restart only if the ~/.claude/skills directory was created after startup.",
+    },
+    "codex-project": {
+        "root": ".agents/skills",
+        "harness": "OpenAI Codex",
+        "scope": "project",
+        "next": "Codex detects skill changes automatically; use /skills or ${name}, and restart Codex only if it is absent.",
+    },
+    "codex-global": {
+        "root": "~/.agents/skills",
+        "harness": "OpenAI Codex",
+        "scope": "global",
+        "next": "Codex detects skill changes automatically; use /skills or ${name}, and restart Codex only if it is absent.",
+    },
+    "opencode-project": {
+        "root": ".opencode/skills",
+        "harness": "OpenCode",
+        "scope": "project",
+        "next": "Restart OpenCode if needed, then confirm its skill tool lists {name} and permissions allow it.",
+    },
+    "opencode-global": {
+        "root": "~/.config/opencode/skills",
+        "harness": "OpenCode",
+        "scope": "global",
+        "next": "Restart OpenCode if needed, then confirm its skill tool lists {name} and permissions allow it.",
+    },
+    "gemini-project": {
+        "root": ".gemini/skills",
+        "harness": "Gemini CLI",
+        "scope": "project",
+        "next": "In Gemini CLI, run /skills reload and then /skills list; activation asks for consent.",
+    },
+    "gemini-global": {
+        "root": "~/.gemini/skills",
+        "harness": "Gemini CLI",
+        "scope": "global",
+        "next": "In Gemini CLI, run /skills reload and then /skills list; activation asks for consent.",
+    },
+    "cursor-project": {
+        "root": ".cursor/skills",
+        "harness": "Cursor",
+        "scope": "project",
+        "next": "In Cursor, open Customize > Skills or invoke /{name} in Agent chat.",
+    },
+    "cursor-global": {
+        "root": "~/.cursor/skills",
+        "harness": "Cursor",
+        "scope": "global",
+        "next": "In Cursor, open Customize > Skills or invoke /{name} in Agent chat.",
+    },
+    "windsurf-project": {
+        "root": ".windsurf/skills",
+        "harness": "Windsurf Cascade",
+        "scope": "project",
+        "next": "In Cascade, invoke @{name}; reopen Cascade if the skill is not listed.",
+    },
+    "windsurf-global": {
+        "root": "~/.codeium/windsurf/skills",
+        "harness": "Windsurf Cascade",
+        "scope": "global",
+        "next": "In Cascade, invoke @{name}; reopen Cascade if the skill is not listed.",
+    },
+    "copilot-project": {
+        "root": ".github/skills",
+        "harness": "GitHub Copilot and VS Code",
+        "scope": "project",
+        "next": "In Copilot CLI, run /skills reload and /skills info {name}; repository skills also load in supported Copilot agents.",
+    },
+    "copilot-global": {
+        "root": "~/.copilot/skills",
+        "harness": "GitHub Copilot and VS Code",
+        "scope": "global",
+        "next": "In Copilot CLI, run /skills reload and /skills info {name}.",
+    },
+    "cline-project": {
+        "root": ".cline/skills",
+        "harness": "Cline",
+        "scope": "project",
+        "next": "In Cline, confirm {name} is enabled in the Skills menu or invoke /{name}.",
+    },
+    "cline-global": {
+        "root": "~/.cline/skills",
+        "harness": "Cline",
+        "scope": "global",
+        "next": "In Cline, confirm {name} is enabled in the Skills menu or invoke /{name}.",
+    },
+    "roo-project": {
+        "root": ".roo/skills",
+        "harness": "Roo Code",
+        "scope": "project",
+        "next": "Roo watches SKILL.md changes; confirm {name} is available in the current mode.",
+    },
+    "roo-global": {
+        "root": "~/.roo/skills",
+        "harness": "Roo Code",
+        "scope": "global",
+        "next": "Roo watches SKILL.md changes; confirm {name} is available in the current mode.",
+    },
+    "junie-project": {
+        "root": ".junie/skills",
+        "harness": "JetBrains Junie",
+        "scope": "project",
+        "next": "In Junie, invoke /{name} or ${name}; restart the session if it is not suggested.",
+    },
+    "junie-global": {
+        "root": "~/.junie/skills",
+        "harness": "JetBrains Junie",
+        "scope": "global",
+        "next": "In Junie, invoke /{name} or ${name}; restart the session if it is not suggested.",
+    },
+    "kiro-project": {
+        "root": ".kiro/skills",
+        "harness": "Kiro",
+        "scope": "project",
+        "next": "Restart the Kiro agent if needed and invoke /{name}; custom agents must include the skill:// resource.",
+    },
+    "kiro-global": {
+        "root": "~/.kiro/skills",
+        "harness": "Kiro",
+        "scope": "global",
+        "next": "Restart the Kiro agent if needed and invoke /{name}; custom agents must include the skill:// resource.",
+    },
+    "factory-project": {
+        "root": ".factory/skills",
+        "harness": "Factory Droid",
+        "scope": "project",
+        "next": "Start a new Droid session if needed, then invoke /{name}.",
+    },
+    "factory-global": {
+        "root": "~/.factory/skills",
+        "harness": "Factory Droid",
+        "scope": "global",
+        "next": "Start a new Droid session if needed, then invoke /{name}.",
+    },
+}
+
+TARGET_ROOTS = {name: details["root"] for name, details in TARGETS.items()}
+AGENT_SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+YAML_NON_STRING_PLAIN_PATTERN = re.compile(
+    r"^[+-]?(?:[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?|"
+    r"[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9_]+)?|"
+    r"0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.(?:[0-9_]+(?:[eE][+-]?[0-9_]+)?|inf|nan)|"
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[Tt ].*)?)$",
+    re.IGNORECASE,
+)
+YAML_BLOCK_SCALAR_PATTERN = re.compile(r"^[>|](?:(?:[1-9][+-]?)|(?:[+-][1-9]?))?$")
+YAML_FORBIDDEN_PLAIN_PREFIXES = ("@", "`", "!", "&", "*", "#", "%", ",", "[", "]", "{", "}", "|", ">")
+AGENT_SKILL_FRONTMATTER_FIELDS = {
+    "name",
+    "description",
+    "license",
+    "compatibility",
+    "metadata",
+    "allowed-tools",
 }
 
 STOP_WORDS = {
@@ -1164,13 +1346,24 @@ def command_discover(args: argparse.Namespace) -> None:
     print_ard_detail_summaries(summaries)
 
 
+def normalized_archive_path(filename: str) -> PurePosixPath:
+    normalized = filename.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if (
+        "\x00" in normalized
+        or path.is_absolute()
+        or ".." in path.parts
+        or any(PureWindowsPath(part).drive for part in path.parts)
+    ):
+        raise SystemExit(f"Unsafe archive path: {filename}")
+    return path
+
+
 def safe_zip_members(zf: zipfile.ZipFile):
     for member in zf.infolist():
         if member.is_dir():
             continue
-        path = Path(member.filename)
-        if path.is_absolute() or ".." in path.parts:
-            raise SystemExit(f"Unsafe archive path: {member.filename}")
+        normalized_archive_path(member.filename)
         yield member
 
 
@@ -1185,10 +1378,13 @@ def skill_prefix_in_archive(zf: zipfile.ZipFile) -> str | None:
 
 
 def prepare_dest(dest: Path, force: bool) -> None:
-    if dest.exists():
+    if dest.exists() or dest.is_symlink():
         if not force:
             raise SystemExit(f"Destination already exists: {dest}\nUse --force to replace it.")
-        shutil.rmtree(dest)
+        if dest.is_dir() and not dest.is_symlink():
+            shutil.rmtree(dest)
+        else:
+            dest.unlink()
     dest.mkdir(parents=True, exist_ok=True)
 
 
@@ -1237,7 +1433,7 @@ def normalize_github_source_path(path: str) -> str:
 
 def github_archive_member_rel(member: zipfile.ZipInfo) -> str:
     """Return a GitHub zip member path relative to the archive root directory."""
-    parts = PurePosixPath(member.filename).parts
+    parts = normalized_archive_path(member.filename).parts
     if len(parts) <= 1:
         return ""
     return PurePosixPath(*parts[1:]).as_posix()
@@ -1394,14 +1590,554 @@ def resolve_install_dest(args: argparse.Namespace, capability_name: str) -> Path
     return Path(root).expanduser() / (args.name or capability_name)
 
 
-def installed_skill_name(dest: Path) -> str:
-    skill_file = dest / "SKILL.md"
+def is_yaml_block_scalar(value: str) -> bool:
+    return bool(YAML_BLOCK_SCALAR_PATTERN.fullmatch(strip_yaml_inline_comment(value)))
+
+
+def yaml_block_scalar_indent(value: str) -> int | None:
+    match = re.search(r"[1-9]", strip_yaml_inline_comment(value))
+    return int(match.group()) if match else None
+
+
+def yaml_plain_scalar_has_forbidden_prefix(value: str) -> bool:
+    if value.startswith(YAML_FORBIDDEN_PLAIN_PREFIXES):
+        return True
+    return bool(re.match(r"^[-?:](?:\s|$)", value))
+
+
+def strip_yaml_inline_comment(value: str) -> str:
+    value = value.strip()
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if quote == "'":
+            if char == "'" and index + 1 < len(value) and value[index + 1] == "'":
+                index += 2
+                continue
+            if char == "'":
+                quote = None
+        elif quote == '"':
+            if char == "\\" and index + 1 < len(value):
+                index += 2
+                continue
+            if char == '"':
+                quote = None
+        elif index == 0 and char in {"'", '"'}:
+            quote = char
+        elif char == "#" and (index == 0 or value[index - 1] in {" ", "\t"}):
+            return value[:index].rstrip(" \t")
+        index += 1
+    return value
+
+
+def parse_yaml_double_quoted(value: str) -> str:
+    escapes = {
+        "0": "\0",
+        "a": "\a",
+        "b": "\b",
+        "t": "\t",
+        "n": "\n",
+        "v": "\v",
+        "f": "\f",
+        "r": "\r",
+        "e": "\x1b",
+        " ": " ",
+        '"': '"',
+        "/": "/",
+        "\\": "\\",
+        "N": "\x85",
+        "_": "\xa0",
+        "L": "\u2028",
+        "P": "\u2029",
+    }
+    inner = value[1:-1]
+    result: list[str] = []
+    index = 0
+    while index < len(inner):
+        char = inner[index]
+        if char == '"':
+            raise ValueError("contains an unescaped double quote")
+        if char != "\\":
+            result.append(char)
+            index += 1
+            continue
+        index += 1
+        if index >= len(inner):
+            raise ValueError("ends with an incomplete escape")
+        escape = inner[index]
+        if escape in escapes:
+            result.append(escapes[escape])
+            index += 1
+            continue
+        if escape not in "xuU":
+            raise ValueError(f"contains unsupported escape \\{escape}")
+        width = {"x": 2, "u": 4, "U": 8}[escape]
+        digits = inner[index + 1 : index + 1 + width]
+        if len(digits) != width or not all(char in "0123456789abcdefABCDEF" for char in digits):
+            raise ValueError(f"contains an invalid \\{escape} escape")
+        codepoint = int(digits, 16)
+        if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+            raise ValueError(f"contains an invalid Unicode code point in \\{escape}")
+        result.append(chr(codepoint))
+        index += width + 1
+    return "".join(result)
+
+
+def valid_yaml_double_quoted(value: str) -> bool:
+    try:
+        parse_yaml_double_quoted(value)
+    except ValueError:
+        return False
+    return True
+
+
+def split_yaml_mapping_entry(value: str) -> tuple[str, str] | None:
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if quote == "'":
+            if char == "'" and index + 1 < len(value) and value[index + 1] == "'":
+                index += 2
+                continue
+            if char == "'":
+                quote = None
+        elif quote == '"':
+            if char == "\\" and index + 1 < len(value):
+                index += 2
+                continue
+            if char == '"':
+                quote = None
+        elif char in {"'", '"'} and not value[:index].strip():
+            quote = char
+        elif char == ":" and (index + 1 == len(value) or value[index + 1].isspace()):
+            key = value[:index].strip()
+            item_value = value[index + 1 :].strip()
+            return (key, item_value) if key and item_value else None
+        index += 1
+    return None
+
+
+def parse_yaml_scalar(value: str) -> str:
+    value = strip_yaml_inline_comment(value)
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        inner = value[1:-1]
+        if "'" in inner.replace("''", ""):
+            raise ValueError("contains an unescaped apostrophe in a single-quoted YAML scalar; escape it as ''")
+        return inner.replace("''", "'")
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return parse_yaml_double_quoted(value)
+    return value
+
+
+def render_yaml_block_scalar(marker: str, continuation: list[str]) -> str:
+    marker = strip_yaml_inline_comment(marker)
+    nonblank = [line for line in continuation if line.strip()]
+    explicit = yaml_block_scalar_indent(marker)
+    required = explicit or (len(nonblank[0]) - len(nonblank[0].lstrip()) if nonblank else 0)
+    content = [line[required:] if line.strip() else "" for line in continuation]
+    trailing_blank = 0
+    while content and not content[-1]:
+        trailing_blank += 1
+        content.pop()
+    separator = "\n" if marker.startswith("|") else " "
+    rendered = separator.join(content)
+    if content:
+        rendered += "\n" * (trailing_blank + 1)
+    elif continuation:
+        rendered = "\n" * len(continuation)
+    if "-" in marker:
+        return rendered.rstrip("\n")
+    if "+" in marker:
+        return rendered
+    clipped = rendered.rstrip("\n")
+    return f"{clipped}\n" if clipped else ""
+
+
+def frontmatter_value(raw: str, continuation: list[str]) -> str:
+    marker = strip_yaml_inline_comment(raw)
+    if is_yaml_block_scalar(marker):
+        return render_yaml_block_scalar(marker, continuation)
+    content = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
+    value = parse_yaml_scalar(marker)
+    if content:
+        suffix = " ".join(content)
+        value = f"{value} {suffix}".strip()
+    return value
+
+
+def block_scalar_indentation_error(marker: str, continuation: list[str]) -> str | None:
+    required_indent = yaml_block_scalar_indent(marker)
+    for line in continuation:
+        if not line.strip():
+            continue
+        prefix = line[: len(line) - len(line.lstrip(" \t"))]
+        if "\t" in prefix:
+            return "must use spaces, not tabs, for indentation"
+        indent = len(prefix)
+        if required_indent is None:
+            required_indent = indent
+        elif indent < required_indent:
+            return f"must use at least {required_indent} spaces established by its first content line"
+    return None
+
+
+def parse_skill_frontmatter(text: str) -> dict[str, Any]:
+    clean_text = text[1:] if text.startswith("\ufeff") else text
+    lines = (
+        clean_text.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\x85", "\n")
+        .replace("\u2028", "\n")
+        .replace("\u2029", "\n")
+        .split("\n")
+    )
+    errors: list[str] = []
+    warnings: list[str] = []
+    if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ufffe\uffff]", clean_text):
+        return {"fields": {}, "rawFields": {}, "body": "", "errors": ["SKILL.md contains YAML-forbidden control characters"], "warnings": warnings}
+    if not lines or lines[0] != "---":
+        return {
+            "fields": {},
+            "rawFields": {},
+            "body": "",
+            "errors": ["SKILL.md must start with YAML frontmatter delimited by ---"],
+            "warnings": warnings,
+        }
+    try:
+        closing = next(index for index, line in enumerate(lines[1:], start=1) if line == "---")
+    except StopIteration:
+        return {
+            "fields": {},
+            "rawFields": {},
+            "body": "",
+            "errors": ["SKILL.md frontmatter is missing its closing --- delimiter"],
+            "warnings": warnings,
+        }
+
+    raw_fields: dict[str, tuple[str, list[str]]] = {}
+    current_key: str | None = None
+    field_pattern = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?:[ \t]+(?P<value>.*))?$")
+    for line_number, line in enumerate(lines[1:closing], start=2):
+        if not line.strip():
+            if current_key is not None:
+                raw_fields[current_key][1].append(line)
+            continue
+        if line.lstrip().startswith("#"):
+            if line.startswith((" ", "\t")) and current_key is not None:
+                raw_value, continuation = raw_fields[current_key]
+                if is_yaml_block_scalar(raw_value):
+                    explicit = yaml_block_scalar_indent(raw_value)
+                    prior = [item for item in continuation if item.strip()]
+                    required = explicit or (
+                        len(prior[0]) - len(prior[0].lstrip(" \t")) if prior else None
+                    )
+                    indent = len(line) - len(line.lstrip(" \t"))
+                    if required is None or indent >= required:
+                        continuation.append(line)
+            continue
+        if line.startswith((" ", "\t")):
+            if current_key is None:
+                errors.append(f"frontmatter line {line_number} is indented without a parent field")
+            else:
+                raw_value, continuation = raw_fields[current_key]
+                if raw_value.strip() and not is_yaml_block_scalar(raw_value):
+                    errors.append(
+                        f"frontmatter line {line_number} cannot continue non-block scalar field '{current_key}'; "
+                        "use | or > for multiline values"
+                    )
+                else:
+                    continuation.append(line)
+            continue
+        match = field_pattern.match(line)
+        if not match:
+            errors.append(f"frontmatter line {line_number} is not a top-level YAML field")
+            current_key = None
+            continue
+        key = match.group("key")
+        if key in raw_fields:
+            errors.append(f"frontmatter field '{key}' is declared more than once")
+            current_key = key
+            continue
+        raw_fields[key] = (match.group("value") or "", [])
+        current_key = key
+
+    fields: dict[str, Any] = {}
+    for key, (raw, continuation) in raw_fields.items():
+        if is_yaml_block_scalar(raw):
+            indentation_error = block_scalar_indentation_error(raw, continuation)
+            if indentation_error:
+                errors.append(f"block scalar field '{key}' {indentation_error}")
+        try:
+            fields[key] = frontmatter_value(raw, continuation)
+        except ValueError as error:
+            fields[key] = ""
+            errors.append(f"frontmatter field '{key}' {error}")
+    unknown = sorted(set(fields) - AGENT_SKILL_FRONTMATTER_FIELDS)
+    if unknown:
+        warnings.append(
+            "non-standard frontmatter fields may not work in every harness or Claude upload: " + ", ".join(unknown)
+        )
+    body = "\n".join(lines[closing + 1 :]).strip()
+    if not body:
+        warnings.append("SKILL.md has no instruction body")
+    return {
+        "fields": fields,
+        "rawFields": raw_fields,
+        "body": body,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def validate_scalar_shape(
+    raw_fields: dict[str, tuple[str, list[str]]],
+    key: str,
+    errors: list[str],
+) -> None:
+    if key not in raw_fields:
+        return
+    raw, continuation = raw_fields[key]
+    value = strip_yaml_inline_comment(raw)
+    if value and not is_yaml_block_scalar(value):
+        quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+        mismatched_quote = value.startswith(("'", '"')) or value.endswith(("'", '"'))
+        invalid_double_quote = False
+        if quoted and value.startswith('"'):
+            invalid_double_quote = not valid_yaml_double_quoted(value)
+        invalid_plain = not quoted and (
+            yaml_plain_scalar_has_forbidden_prefix(value)
+            or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
+            or bool(YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value))
+            or bool(re.search(r":(?:\s|$)", value))
+        )
+        if invalid_double_quote or (mismatched_quote and not quoted) or invalid_plain:
+            errors.append(f"frontmatter field '{key}' must be a YAML string scalar; quote it or use a block scalar")
+    if not value:
+        meaningful = [line.strip() for line in continuation if line.strip() and not line.lstrip().startswith("#")]
+        if any(line.startswith("- ") or re.match(r"^[^:#]+:\s", line) for line in meaningful):
+            errors.append(f"frontmatter field '{key}' must be a string, not a sequence or mapping")
+        else:
+            errors.append(f"frontmatter field '{key}' must be a YAML string scalar; quote an empty string explicitly")
+
+
+def validate_metadata_mapping(
+    raw_metadata: tuple[str, list[str]] | None,
+    errors: list[str],
+) -> None:
+    if raw_metadata is None:
+        return
+    raw, lines = raw_metadata
+    if raw.strip():
+        errors.append("metadata must use an indented YAML mapping from string keys to string values")
+        return
+    entries = [line for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    if not entries:
+        errors.append("metadata must contain at least one string key/value entry")
+        return
+    entry_indent: int | None = None
+    seen: set[str] = set()
+    for line in entries:
+        stripped = line.strip()
+        prefix = line[: len(line) - len(line.lstrip(" \t"))]
+        if stripped.startswith("- "):
+            errors.append("metadata must be a mapping, not a sequence")
+            return
+        if "\t" in prefix:
+            errors.append("metadata entries must use spaces, not tabs, for indentation")
+            return
+        indent = len(prefix)
+        if entry_indent is None:
+            entry_indent = indent
+        elif indent != entry_indent:
+            errors.append("metadata must be a flat string-to-string mapping with consistent indentation")
+            return
+        item = split_yaml_mapping_entry(stripped)
+        if item is None:
+            errors.append("metadata must contain string key/value entries")
+            return
+        key, item_value = item
+        value = strip_yaml_inline_comment(item_value)
+        if not value:
+            errors.append(f"metadata value for '{key}' must be a YAML string scalar")
+            return
+        key_quoted = len(key) >= 2 and key[0] == key[-1] and key[0] in {"'", '"'}
+        invalid_key_single = key_quoted and key.startswith("'") and "'" in key[1:-1].replace("''", "")
+        invalid_key_double = False
+        if key_quoted and key.startswith('"'):
+            invalid_key_double = not valid_yaml_double_quoted(key)
+        invalid_key_plain = not key_quoted and (
+            yaml_plain_scalar_has_forbidden_prefix(key)
+            or key.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
+            or bool(YAML_NON_STRING_PLAIN_PATTERN.fullmatch(key))
+        )
+        mismatched_key_quote = (key.startswith(("'", '"')) or key.endswith(("'", '"'))) and not key_quoted
+        if invalid_key_single or invalid_key_double or invalid_key_plain or mismatched_key_quote:
+            errors.append(f"metadata key '{key}' must be a YAML string scalar")
+            return
+        try:
+            resolved_key = parse_yaml_scalar(key)
+        except ValueError:
+            errors.append(f"metadata key '{key}' must be a YAML string scalar")
+            return
+        if resolved_key in seen:
+            errors.append(f"metadata key '{resolved_key}' is declared more than once")
+            return
+        seen.add(resolved_key)
+        quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+        invalid_single_quote = quoted and value.startswith("'") and "'" in value[1:-1].replace("''", "")
+        invalid_double_quote = False
+        if quoted and value.startswith('"'):
+            invalid_double_quote = not valid_yaml_double_quoted(value)
+        invalid_plain = not quoted and (
+            yaml_plain_scalar_has_forbidden_prefix(value)
+            or value.casefold() in {"null", "true", "false", "yes", "no", "on", "off", "y", "n", "~"}
+            or bool(YAML_NON_STRING_PLAIN_PATTERN.fullmatch(value))
+            or bool(re.search(r":(?:\s|$)", value))
+        )
+        mismatched_quote = (value.startswith(("'", '"')) or value.endswith(("'", '"'))) and not quoted
+        if invalid_single_quote or invalid_double_quote or invalid_plain or mismatched_quote:
+            errors.append(f"metadata value for '{key}' must be a YAML string scalar")
+            return
+
+
+def validate_skill_directory(skill_dir: Path, expected_name: str | None = None) -> dict[str, Any]:
+    skill_dir = skill_dir.expanduser()
+    skill_file = skill_dir if skill_dir.name == "SKILL.md" and skill_dir.is_file() else skill_dir / "SKILL.md"
+    directory = skill_file.parent
+    errors: list[str] = []
+    warnings: list[str] = []
     try:
         text = skill_file.read_text(encoding="utf-8")
-    except OSError:
-        return dest.name
-    match = re.search(r"(?m)^name:\s*['\"]?([a-z0-9][a-z0-9-]*)['\"]?\s*$", text)
-    return match.group(1) if match else dest.name
+    except FileNotFoundError:
+        return {
+            "path": str(skill_file),
+            "valid": False,
+            "portable": False,
+            "name": None,
+            "descriptionLength": 0,
+            "frontmatterFields": [],
+            "errors": ["skill directory must contain a file named exactly SKILL.md"],
+            "warnings": [],
+        }
+    except (OSError, UnicodeError) as error:
+        return {
+            "path": str(skill_file),
+            "valid": False,
+            "portable": False,
+            "name": None,
+            "descriptionLength": 0,
+            "frontmatterFields": [],
+            "errors": [f"SKILL.md must be readable UTF-8: {error}"],
+            "warnings": [],
+        }
+
+    parsed = parse_skill_frontmatter(text)
+    fields = parsed["fields"]
+    errors.extend(parsed["errors"])
+    warnings.extend(parsed["warnings"])
+    name = fields.get("name", "")
+    description = fields.get("description", "")
+    compatibility = fields.get("compatibility")
+    for scalar_field in ("name", "description", "license", "compatibility", "allowed-tools"):
+        validate_scalar_shape(parsed["rawFields"], scalar_field, errors)
+
+    if not name:
+        errors.append("frontmatter field 'name' is required")
+    elif len(name) > 64 or not AGENT_SKILL_NAME_PATTERN.fullmatch(name):
+        errors.append("name must be 1-64 lowercase letters, numbers, or single hyphens")
+
+    directory_name = expected_name if expected_name is not None else directory.name
+    if name and directory_name and name != directory_name:
+        errors.append(f"frontmatter name '{name}' must match parent directory '{directory_name}'")
+
+    if not description:
+        errors.append("frontmatter field 'description' is required and must be non-empty")
+    elif len(description) > 1024:
+        errors.append("description must not exceed 1024 characters")
+
+    if compatibility is not None and (not compatibility or len(compatibility) > 500):
+        errors.append("compatibility must contain 1-500 characters when provided")
+
+    validate_metadata_mapping(parsed["rawFields"].get("metadata"), errors)
+
+    unknown = sorted(set(fields) - AGENT_SKILL_FRONTMATTER_FIELDS)
+    return {
+        "path": str(skill_file),
+        "valid": not errors,
+        "portable": not errors and not unknown,
+        "name": name or None,
+        "descriptionLength": len(description),
+        "frontmatterFields": sorted(fields),
+        "bodyLines": len(parsed["body"].splitlines()) if parsed["body"] else 0,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def require_valid_skill(skill_dir: Path, expected_name: str | None = None) -> dict[str, Any]:
+    validation = validate_skill_directory(skill_dir, expected_name)
+    if validation["valid"]:
+        return validation
+    details = "\n".join(f"- {message}" for message in validation["errors"])
+    raise SystemExit(f"Skill is not compatible with the Agent Skills specification:\n{details}")
+
+
+def target_next_step(target: str, skill_name: str) -> str:
+    return TARGETS[target]["next"].format(name=skill_name)
+
+
+def target_summary(target: str) -> dict[str, str]:
+    details = TARGETS[target]
+    return {
+        "target": target,
+        "harness": details["harness"],
+        "scope": details["scope"],
+        "root": details["root"],
+        "resolvedRoot": str(Path(details["root"]).expanduser()),
+    }
+
+
+def command_targets(args: argparse.Namespace) -> None:
+    names = sorted(TARGETS)
+    if args.harness:
+        needle = args.harness.casefold()
+        names = [
+            name
+            for name in names
+            if needle in name.casefold()
+            or needle in TARGETS[name]["harness"].casefold()
+            or needle in TARGETS[name].get("aliases", "").casefold()
+        ]
+    targets = [target_summary(name) for name in names]
+    if args.scope:
+        targets = [item for item in targets if item["scope"] == args.scope]
+    if args.json_output:
+        print_json({"default": "agents-project", "targets": targets})
+        return
+    print("Default target: agents-project (.agents/skills)")
+    for item in targets:
+        print(f"{item['target']:<20} {item['root']:<31} {item['harness']}")
+
+
+def command_validate_skill(args: argparse.Namespace) -> None:
+    path = Path(args.path).expanduser()
+    validation = validate_skill_directory(path)
+    if args.json_output:
+        print_json(validation)
+    else:
+        status = "valid" if validation["valid"] else "invalid"
+        print(f"{status}: {validation['path']}")
+        if validation.get("name"):
+            print(f"name: {validation['name']}")
+        print(f"portable: {'yes' if validation['portable'] else 'no'}")
+        for warning in validation["warnings"]:
+            print(f"warning: {warning}")
+        for error in validation["errors"]:
+            print(f"error: {error}")
+    if not validation["valid"]:
+        raise SystemExit(1)
 
 
 def normalize_sha256(value: str | None) -> str | None:
@@ -1484,9 +2220,16 @@ def source_descriptor_value(descriptor: dict[str, Any], entry: dict[str, Any], *
     return ard_metadata_string(entry, *keys)
 
 
-def download_archive_source_path(archive_url: str, source_path_value: str, dest: Path, force: bool) -> None:
+def download_archive_source_path(
+    archive_url: str,
+    source_path_value: str,
+    dest: Path,
+    force: bool,
+    expected_checksum: str | None,
+) -> str:
     source_path_value = normalize_github_source_path(source_path_value)
     archive = fetch_bytes(archive_url)
+    checksum = verify_archive_checksum(archive, expected_checksum)
     with zipfile.ZipFile(io.BytesIO(archive)) as zf:
         rel_members = github_archive_rel_members(zf)
         skill_marker = f"{source_path_value}/SKILL.md" if source_path_value else "SKILL.md"
@@ -1507,6 +2250,7 @@ def download_archive_source_path(archive_url: str, source_path_value: str, dest:
     if not (dest / "SKILL.md").exists():
         shutil.rmtree(dest, ignore_errors=True)
         raise SystemExit("Source archive install completed but did not produce SKILL.md")
+    return checksum
 
 
 def ard_source_descriptor(entry: dict[str, Any]) -> dict[str, Any]:
@@ -1560,23 +2304,37 @@ def install_ard_zip_entry(entry: dict[str, Any], dest: Path, force: bool) -> tup
     return "ARD skill zip", checksum
 
 
-def install_ard_source_entry(entry: dict[str, Any], dest: Path, force: bool) -> str:
+def install_ard_source_entry(entry: dict[str, Any], dest: Path, force: bool) -> tuple[str, str | None]:
     descriptor = ard_source_descriptor(entry)
     archive_url = source_descriptor_value(descriptor, entry, "archiveUrl", "com.capelry.sourceArchiveUrl")
     source_path_value = source_descriptor_value(descriptor, entry, "path", "sourcePath", "com.capelry.sourcePath", "metadata.com.capelry.sourcePath") or ""
     ref = source_descriptor_value(descriptor, entry, "ref", "sourceRef", "defaultBranch", "com.capelry.sourceRef", "metadata.com.capelry.sourceRef") or "main"
     repository = source_descriptor_value(descriptor, entry, "repository", "sourceRepository", "com.capelry.sourceRepository", "metadata.com.capelry.sourceRepository")
+    archive_checksum = source_descriptor_value(
+        descriptor,
+        entry,
+        "archiveChecksumSha256",
+        "checksumSha256",
+        "com.capelry.sourceArchiveChecksumSha256",
+        "metadata.com.capelry.sourceArchiveChecksumSha256",
+    ) or ard_archive_checksum(entry)
 
     if archive_url:
-        download_archive_source_path(archive_url, source_path_value, dest, force)
-        return f"ARD source archive descriptor at {ref}"
+        checksum = download_archive_source_path(
+            archive_url,
+            source_path_value,
+            dest,
+            force,
+            archive_checksum,
+        )
+        return f"ARD source archive descriptor at {ref}", checksum
 
     if repository:
         parts = github_parts(repository)
         if parts:
             owner, repo = parts
             download_github_archive_path(owner, repo, source_path_value, ref, dest, force)
-            return f"ARD GitHub source descriptor at {ref}"
+            return f"ARD GitHub source descriptor at {ref}", None
 
     raise SystemExit("ARD source entry did not include a supported GitHub repository or source archive descriptor")
 
@@ -1593,21 +2351,38 @@ def install_ard_entry(entry: dict[str, Any], dest: Path, force: bool) -> tuple[s
         installed_from, checksum = install_ard_zip_entry(entry, dest, force)
         return installed_from, checksum
     if media_type == "application/vnd.capelry.skill-source+json":
-        return install_ard_source_entry(entry, dest, force), None
+        return install_ard_source_entry(entry, dest, force)
     raise SystemExit(unsupported_ard_install_message(entry))
+
+
+def install_ard_entry_for_args(
+    entry: dict[str, Any],
+    args: argparse.Namespace,
+    install_name: str,
+) -> tuple[Path, str, str | None, dict[str, Any]]:
+    dest = resolve_install_dest(args, install_name)
+    if path_exists(dest) and not args.force:
+        raise SystemExit(f"Destination already exists: {dest}\nUse --force to replace it.")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{dest.name}.install-", dir=str(dest.parent)) as temp_root:
+        candidate = Path(temp_root) / dest.name
+        installed_from, checksum = install_ard_entry(entry, candidate, force=True)
+        validation = require_valid_skill(candidate, expected_name=dest.name)
+        replace_skill_dir(dest, candidate, keep_backup=False)
+        validation = {**validation, "path": str(dest / "SKILL.md")}
+    return dest, installed_from, checksum, validation
 
 
 def command_install(args: argparse.Namespace) -> None:
     base = registry_base(args)
     entry = resolve_ard_entry_for_install(base, args.ref)
     media_type = ard_entry_media_type(entry)
-    dest = resolve_install_dest(args, ard_entry_install_name(entry, args.ref))
     if not args.json_output:
         print_ard_trust_summary(entry)
 
-    installed_from, checksum = install_ard_entry(entry, dest, args.force)
-
-    skill_name = installed_skill_name(dest)
+    install_name = ard_entry_install_name(entry, args.ref)
+    dest, installed_from, checksum, validation = install_ard_entry_for_args(entry, args, install_name)
+    skill_name = str(validation["name"])
     result = {
         "registry": base,
         "api": "ard",
@@ -1616,10 +2391,12 @@ def command_install(args: argparse.Namespace) -> None:
         "slug": ard_slug(entry),
         "mediaType": media_type,
         "trustState": ard_trust_state(entry),
+        "target": args.target if not args.dest else None,
         "destination": str(dest),
         "installedFrom": installed_from,
         "skillName": skill_name,
-        "next": f"reload or restart your agent; in Pi run /reload and then /skill:{skill_name}",
+        "validation": validation,
+        "next": target_next_step(args.target, skill_name) if not args.dest else "Reload or restart the active harness and confirm the skill is listed.",
     }
     if checksum:
         result["checksumSha256"] = checksum
@@ -1629,7 +2406,10 @@ def command_install(args: argparse.Namespace) -> None:
 
     print(f"Installed {entry.get('identifier', args.ref)} to {dest}")
     print(f"source: {installed_from}")
-    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:" + skill_name)
+    print(f"Validated Agent Skills metadata: {skill_name} ({validation['descriptionLength']} description characters)")
+    for warning in validation["warnings"]:
+        print(f"warning: {warning}")
+    print("Next: " + str(result["next"]))
 
 
 def confirm_bulk_install(args: argparse.Namespace, count: int, target: str) -> None:
@@ -1675,6 +2455,7 @@ def command_install_catalog(args: argparse.Namespace) -> None:
             "api": "ard",
             "catalog": args.catalog,
             "target": args.target,
+            "targetDetails": target_summary(args.target),
             "count": len(planned),
             "limit": limit,
             "dryRun": True,
@@ -1692,10 +2473,21 @@ def command_install_catalog(args: argparse.Namespace) -> None:
     results: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     for item, entry in zip(planned, entries):
-        dest = Path(str(item["destination"]))
         try:
-            installed_from, checksum = install_ard_entry(entry, dest, args.force)
-            result = {**item, "installed": True, "installedFrom": installed_from}
+            dest, installed_from, checksum, validation = install_ard_entry_for_args(
+                entry,
+                args,
+                str(item["skillName"]),
+            )
+            result = {
+                **item,
+                "destination": str(dest),
+                "skillName": validation["name"],
+                "installed": True,
+                "installedFrom": installed_from,
+                "validation": validation,
+                "next": target_next_step(args.target, str(validation["name"])),
+            }
             if checksum:
                 result["checksumSha256"] = checksum
             results.append(result)
@@ -1709,6 +2501,7 @@ def command_install_catalog(args: argparse.Namespace) -> None:
         "api": "ard",
         "catalog": args.catalog,
         "target": args.target,
+        "targetDetails": target_summary(args.target),
         "count": len(results),
         "errorCount": len(errors),
         "limit": limit,
@@ -1725,7 +2518,7 @@ def command_install_catalog(args: argparse.Namespace) -> None:
         print(f"error: {error['slug'] or error['identifier']}: {error['message']}")
     if errors:
         raise SystemExit(1)
-    print("Next: reload or restart your agent so it notices the installed skills.")
+    print("Next: " + target_next_step(args.target, "<skill-name>"))
 
 
 def strip_yaml_scalar(value: str) -> str:
@@ -1956,6 +2749,11 @@ def validate_downloaded_self_skill(dest: Path) -> None:
     missing = [item for item in required if not (dest / item).exists()]
     if missing:
         raise SystemExit("Downloaded Capelry skill is incomplete; missing: " + ", ".join(missing))
+    require_valid_skill(dest, expected_name="capelry")
+
+
+def path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
 
 
 def remove_path(path: Path) -> None:
@@ -1991,25 +2789,34 @@ def replace_skill_dir(dest: Path, new_dir: Path, *, keep_backup: bool) -> Path |
     backup: Path | None = None
     temp_old_parent: Path | None = None
     temp_old: Path | None = None
-    if dest.exists():
+    preserve_old_temp = False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if path_exists(dest):
         if keep_backup:
             backup = backup_archive_path_for(dest)
             create_path_archive(dest, backup)
-        temp_old_parent = Path(tempfile.mkdtemp(prefix="capelry-replace-old-"))
+        temp_old_parent = Path(tempfile.mkdtemp(prefix=f".{dest.name}.old-", dir=str(dest.parent)))
         temp_old = temp_old_parent / dest.name
         shutil.move(str(dest), str(temp_old))
     try:
         shutil.move(str(new_dir), str(dest))
-    except Exception:
-        if dest.exists():
-            remove_path(dest)
-        if temp_old and temp_old.exists():
-            shutil.move(str(temp_old), str(dest))
+    except BaseException:
+        try:
+            if path_exists(dest):
+                remove_path(dest)
+            if temp_old and path_exists(temp_old):
+                shutil.move(str(temp_old), str(dest))
+        except BaseException as rollback_error:
+            preserve_old_temp = bool(temp_old and path_exists(temp_old))
+            location = str(temp_old) if preserve_old_temp else "unavailable"
+            raise RuntimeError(
+                f"Skill replacement and rollback both failed; the previous install is preserved at {location}"
+            ) from rollback_error
         if backup and backup.exists():
             backup.unlink()
         raise
     finally:
-        if temp_old_parent and temp_old_parent.exists():
+        if temp_old_parent and temp_old_parent.exists() and not preserve_old_temp:
             shutil.rmtree(temp_old_parent, ignore_errors=True)
     return backup
 
@@ -2032,6 +2839,8 @@ def sync_install_info(args: argparse.Namespace) -> dict[str, Any]:
     if source_dir == dest_dir:
         raise SystemExit("Local sync source and destination are the same directory")
     validate_downloaded_self_skill(source_dir)
+    if dest_dir.name != "capelry":
+        raise SystemExit("Capelry must be installed in a directory named 'capelry' for cross-harness compatibility")
     dest_version = self_local_version(dest_dir) if dest_dir.exists() else None
     return {
         "sourceDir": str(source_dir),
@@ -2044,7 +2853,8 @@ def sync_install_info(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def copy_local_skill_source(source_dir: Path, dest_dir: Path, *, keep_backup: bool) -> Path | None:
-    with tempfile.TemporaryDirectory(prefix="capelry-local-sync-") as temp_root:
+    dest_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{dest_dir.name}.sync-", dir=str(dest_dir.parent)) as temp_root:
         candidate = Path(temp_root) / "capelry"
         shutil.copytree(source_dir, candidate, ignore=sync_ignore)
         validate_downloaded_self_skill(candidate)
@@ -2087,7 +2897,8 @@ def command_self_update(args: argparse.Namespace) -> None:
         )
 
     owner, repo = split_github_slug(SELF_GITHUB_REPOSITORY)
-    with tempfile.TemporaryDirectory(prefix="capelry-self-update-") as temp_root:
+    skill_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{skill_dir.name}.update-", dir=str(skill_dir.parent)) as temp_root:
         candidate = Path(temp_root) / "capelry"
         archive_error: BaseException | None = None
         try:
@@ -2104,7 +2915,8 @@ def command_self_update(args: argparse.Namespace) -> None:
         validate_downloaded_self_skill(candidate)
         backup = replace_skill_dir(skill_dir, candidate, keep_backup=args.keep_backup)
 
-    result = {**info, "updated": True, "backup": str(backup) if backup else None}
+    next_step = "Reload or restart the active harness and confirm capelry appears in its skills list."
+    result = {**info, "updated": True, "backup": str(backup) if backup else None, "next": next_step}
     if args.json_output:
         print_json(result)
         return
@@ -2112,7 +2924,7 @@ def command_self_update(args: argparse.Namespace) -> None:
     print(f"Updated Capelry skill to {info['remoteVersion']} from {info['remoteRef']}.")
     if backup:
         print(f"backup: {backup}")
-    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:capelry")
+    print("Next: " + next_step)
 
 
 def command_sync_install(args: argparse.Namespace) -> None:
@@ -2133,7 +2945,12 @@ def command_sync_install(args: argparse.Namespace) -> None:
         Path(info["destDir"]),
         keep_backup=not args.no_backup,
     )
-    result = {**info, "updated": True, "backup": str(backup) if backup else None}
+    next_step = (
+        target_next_step(args.target, "capelry")
+        if not args.dest
+        else "Reload or restart the active harness and confirm capelry appears in its skills list."
+    )
+    result = {**info, "updated": True, "backup": str(backup) if backup else None, "next": next_step}
     if args.json_output:
         print_json(result)
         return
@@ -2141,7 +2958,7 @@ def command_sync_install(args: argparse.Namespace) -> None:
     print(f"Synced local Capelry skill from {info['sourceDir']} to {info['destDir']}.")
     if backup:
         print(f"backup: {backup}")
-    print("Next: reload or restart your agent. In Pi, run /reload and then /skill:capelry")
+    print("Next: " + next_step)
 
 
 def add_json_argument(parser: argparse.ArgumentParser) -> None:
@@ -2235,7 +3052,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--status", help="Compatibility no-op: current public ARD routes do not expose status filters")
     discover.add_argument("--domain", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
     discover.add_argument("--phase", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
-    add_install_snippet_argument(discover, default="pi-project")
+    add_install_snippet_argument(discover, default="agents-project")
     add_json_argument(discover)
     discover.set_defaults(func=command_discover)
 
@@ -2251,15 +3068,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bulk-inspect up to 25 ARD identifiers or slugs with /agents",
     )
     bulk_info.add_argument("refs", nargs="+", help="Refs as space-separated or comma-separated ARD identifiers or slugs")
-    add_install_snippet_argument(bulk_info, default="pi-project")
+    add_install_snippet_argument(bulk_info, default="agents-project")
     add_json_argument(bulk_info)
     bulk_info.set_defaults(func=command_bulk_info)
 
-    install = subparsers.add_parser("install", help="Install a supported skill from an ARD entry")
+    targets = subparsers.add_parser("targets", help="List verified coding-harness install targets and paths")
+    targets.add_argument("--harness", help="Filter by harness or target name")
+    targets.add_argument("--scope", choices=("project", "global"), help="Filter by install scope")
+    add_json_argument(targets)
+    targets.set_defaults(func=command_targets)
+
+    validate_skill = subparsers.add_parser(
+        "validate-skill",
+        aliases=["validate"],
+        help="Validate a skill directory against portable Agent Skills requirements",
+    )
+    validate_skill.add_argument("path", help="Skill directory or SKILL.md path")
+    add_json_argument(validate_skill)
+    validate_skill.set_defaults(func=command_validate_skill)
+
+    install = subparsers.add_parser("install", help="Install and validate a supported skill from an ARD entry")
     install.add_argument("ref", help="ARD slug namespace/catalog/resource or urn:air:...")
     install.add_argument("--target", choices=sorted(TARGET_ROOTS), default="agents-project")
     install.add_argument("--dest", help="Exact destination directory")
-    install.add_argument("--name", help="Install directory name override")
+    install.add_argument("--name", help="Install directory name override; must match SKILL.md name")
     install.add_argument("--force", action="store_true", help="Replace an existing destination")
     add_json_argument(install)
     install.set_defaults(func=command_install)
