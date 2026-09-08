@@ -20,6 +20,7 @@ import io
 import os
 import re
 import shutil
+import socket
 import sys
 import tempfile
 import urllib.parse
@@ -34,6 +35,7 @@ DEFAULT_SOURCE_PATHS = ("skills/capelry", ".pi/skills/capelry")
 DEFAULT_SKILLS_DIR = ".agents/skills"
 DEFAULT_SKILL_NAME = "capelry"
 DEFAULT_HTTP_USER_AGENT = "capelry-client bootstrap"
+DEFAULT_HTTP_TIMEOUT_SECONDS = 30
 
 TARGET_SKILLS_DIRS = {
     "agents-project": ".agents/skills",
@@ -113,16 +115,31 @@ def capelry_user_agent(default: str = DEFAULT_HTTP_USER_AGENT) -> str:
     return default
 
 
+def http_timeout_seconds() -> int:
+    raw = os.environ.get("CAPELRY_HTTP_TIMEOUT", str(DEFAULT_HTTP_TIMEOUT_SECONDS)).strip()
+    try:
+        timeout = int(raw)
+    except ValueError as error:
+        raise SystemExit("CAPELRY_HTTP_TIMEOUT must be an integer from 1 to 300 seconds") from error
+    if not 1 <= timeout <= 300:
+        raise SystemExit("CAPELRY_HTTP_TIMEOUT must be an integer from 1 to 300 seconds")
+    return timeout
+
+
 def fetch_bytes(url: str) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": capelry_user_agent()})
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=http_timeout_seconds()) as response:
             return response.read()
     except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
+        try:
+            body = error.read().decode("utf-8", errors="replace")
+        except (TimeoutError, socket.timeout):
+            body = "<response body timed out>"
         raise SystemExit(f"HTTP {error.code} for {url}\n{body}") from error
-    except urllib.error.URLError as error:
-        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
+    except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        reason = getattr(error, "reason", error)
+        raise SystemExit(f"Unable to reach {url}: {reason}") from error
 
 
 def github_owner_repo(repository: str) -> tuple[str, str]:

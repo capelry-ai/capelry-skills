@@ -7,8 +7,13 @@ on:
 
 jobs:
   python:
-    name: Python skill harness
+    name: Python ${{ matrix.python-version }} skill harness
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,13 +21,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Compile Capelry scripts
-        run: python3 -m py_compile skills/capelry/scripts/capelry.py skills/capelry/scripts/bootstrap.py
+        run: python3 -m py_compile skills/capelry/scripts/capelry.py skills/capelry/scripts/bootstrap.py skills/capelry/scripts/package_skill.py
 
       - name: Validate portable Agent Skill package
         run: python3 skills/capelry/scripts/capelry.py validate-skill skills/capelry
 
       - name: Run unit tests
         run: python3 -m unittest discover -s tests
+
+      - name: Report skill cost and quality metrics
+        run: python3 tests/skill_metrics.py

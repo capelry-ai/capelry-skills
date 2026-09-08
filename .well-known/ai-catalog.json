@@ -49,7 +49,7 @@
         "explore Capelry catalog facets",
         "bootstrap capability discovery into a fresh coding project"
       ],
-      "version": "2.1.0",
+      "version": "2.2.0",
       "updatedAt": "2026-08-27T00:00:00Z",
       "metadata": {
         "com.capelry.packageType": "skill",

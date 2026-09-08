@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -21,6 +25,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 CAPELRY_SCRIPT = ROOT / "skills" / "capelry" / "scripts" / "capelry.py"
 BOOTSTRAP_SCRIPT = ROOT / "skills" / "capelry" / "scripts" / "bootstrap.py"
+PACKAGE_SCRIPT = ROOT / "skills" / "capelry" / "scripts" / "package_skill.py"
 SELF_CATALOG = ROOT / "skills" / "capelry" / "ai-catalog.json"
 WELL_KNOWN_CATALOG = ROOT / ".well-known" / "ai-catalog.json"
 SELF_CAPABILITY = ROOT / "skills" / "capelry" / "capability.yaml"
@@ -31,7 +36,7 @@ HARNESS_REFERENCE = ROOT / "skills" / "capelry" / "references" / "harnesses.md"
 
 def clean_env(**overrides: str) -> dict[str, str]:
     env = os.environ.copy()
-    for key in ("CAPELRY_REGISTRY_URL", "CAPELRY_USER_AGENT", "CAPELRY_USER_AGENT_SUFFIX"):
+    for key in ("CAPELRY_REGISTRY_URL", "CAPELRY_USER_AGENT", "CAPELRY_USER_AGENT_SUFFIX", "CAPELRY_HTTP_TIMEOUT"):
         env.pop(key, None)
     env.update(overrides)
     return env
@@ -466,7 +471,48 @@ class RegistryFixture:
         RegistryFixtureHandler.agents_requests = []
         RegistryFixtureHandler.request_user_agents = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), RegistryFixtureHandler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(
+            target=lambda: self.server.serve_forever(poll_interval=0.01),
+            daemon=True,
+        )
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+    @property
+    def url(self) -> str:
+        host, port = self.server.server_address
+        return f"http://{host}:{port}"
+
+
+class TimeoutFixtureHandler(BaseHTTPRequestHandler):
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib handler hook
+        if self.path == "/stall-headers":
+            time.sleep(1.25)
+            return
+        status = 503 if self.path == "/error-stall-body" else 200
+        self.send_response(status)
+        self.send_header("content-length", "1")
+        self.end_headers()
+        self.wfile.flush()
+        time.sleep(1.25)
+
+
+class TimeoutFixture:
+    def __enter__(self) -> "TimeoutFixture":
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), TimeoutFixtureHandler)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever,
+            kwargs={"poll_interval": 0.01},
+            daemon=True,
+        )
         self.thread.start()
         return self
 
@@ -516,6 +562,55 @@ class CapelryScriptTests(unittest.TestCase):
             "urn:air:github.com:capelry-ai:capelry-skills:demo-skill",
         )
         self.assertEqual(RegistryFixtureHandler.ard_requests[0]["federation"], "none")
+
+    def test_http_timeout_is_bounded_for_cli_and_bootstrap(self) -> None:
+        capelry = load_module("capelry_cli_timeout", CAPELRY_SCRIPT)
+        bootstrap = load_module("capelry_bootstrap_timeout", BOOTSTRAP_SCRIPT)
+        with mock.patch.dict(os.environ, {"CAPELRY_HTTP_TIMEOUT": "45"}):
+            self.assertEqual(capelry.http_timeout_seconds(), 45)
+            self.assertEqual(bootstrap.http_timeout_seconds(), 45)
+        for invalid in ("0", "301", "not-a-number"):
+            with self.subTest(value=invalid), mock.patch.dict(os.environ, {"CAPELRY_HTTP_TIMEOUT": invalid}):
+                with self.assertRaisesRegex(SystemExit, "integer from 1 to 300"):
+                    capelry.http_timeout_seconds()
+
+        timeout_calls = (
+            (capelry.fetch_bytes, ("https://example.test/archive",)),
+            (capelry.fetch_github_json, ("https://api.github.com/repos/example/test",)),
+            (capelry.fetch_github_bytes, ("https://codeload.github.com/example/test/zip/main",)),
+            (capelry.fetch_ard_json, ("https://registry.test/agents",)),
+            (capelry.post_ard_json, ("https://registry.test/search", {"query": {"text": "test"}})),
+        )
+        for timeout_error in (TimeoutError("timed out"), socket.timeout("timed out")):
+            for function, arguments in timeout_calls:
+                with self.subTest(
+                    error=type(timeout_error).__name__,
+                    function=function.__name__,
+                ), mock.patch.object(
+                    capelry.urllib.request,
+                    "urlopen",
+                    side_effect=timeout_error,
+                ):
+                    with self.assertRaisesRegex(SystemExit, "Unable to reach .*timed out"):
+                        function(*arguments)
+            with mock.patch.object(bootstrap.urllib.request, "urlopen", side_effect=timeout_error):
+                with self.assertRaisesRegex(SystemExit, "Unable to reach .*timed out"):
+                    bootstrap.fetch_bytes("https://codeload.github.com/example/test/zip/main")
+
+        for timeout_error in (TimeoutError("timed out"), socket.timeout("timed out")):
+            http_error = urllib.error.HTTPError("https://example.test", 503, "unavailable", {}, None)
+            http_error.read = mock.Mock(side_effect=timeout_error)
+            self.assertEqual(capelry.http_error_body(http_error), "<response body timed out>")
+
+        with TimeoutFixture() as fixture, mock.patch.dict(os.environ, {"CAPELRY_HTTP_TIMEOUT": "1"}):
+            for function in (capelry.fetch_bytes, bootstrap.fetch_bytes):
+                for path in ("stall-headers", "stall-body"):
+                    with self.subTest(function=function.__module__, path=path):
+                        with self.assertRaisesRegex(SystemExit, "Unable to reach .*timed out"):
+                            function(f"{fixture.url}/{path}")
+                with self.subTest(function=function.__module__, path="error-stall-body"):
+                    with self.assertRaisesRegex(SystemExit, "(?s)HTTP 503.*response body timed out"):
+                        function(f"{fixture.url}/error-stall-body")
 
     def test_requests_use_capelry_client_user_agent_by_default(self) -> None:
         with RegistryFixture() as fixture:
@@ -791,6 +886,8 @@ class CapelryScriptTests(unittest.TestCase):
 
         payload = json.loads(result.stdout)
         self.assertEqual(payload["entry"]["mediaType"], "application/vnd.capelry.skill-source+json")
+        self.assertIn("trustIdentity", payload["entry"])
+        self.assertIn("provenance", payload["entry"])
         self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         self.assertTrue(RegistryFixtureHandler.agents_requests)
         query = urllib.parse.parse_qs(urllib.parse.urlparse(RegistryFixtureHandler.agents_requests[0]).query)
@@ -824,6 +921,29 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         query = urllib.parse.parse_qs(urllib.parse.urlparse(RegistryFixtureHandler.agents_requests[0]).query)
         self.assertIn("metadata.com.capelry.slug", query["filter"][0])
+
+    def test_info_json_includes_checksum_decision_signal(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "info",
+                    "capelry-ai/capelry-skills/zip-skill",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        entry = json.loads(result.stdout)["entry"]
+        self.assertEqual(entry["trustState"], "checksum-only")
+        self.assertRegex(entry["checksum"], r"^[a-f0-9]{64}$")
+        self.assertEqual(entry["checksumEvidence"], "advertised; verified only during download")
 
     def test_bulk_info_resolves_each_ref_with_ard_agents(self) -> None:
         with RegistryFixture() as fixture:
@@ -876,6 +996,318 @@ class CapelryScriptTests(unittest.TestCase):
         self.assertEqual(payload["entries"][0]["displayName"], "Demo ARD Skill")
         self.assertFalse(RegistryFixtureHandler.unexpected_requests)
         self.assertTrue(RegistryFixtureHandler.ard_requests)
+
+    def test_collect_ard_search_results_ranks_across_expanded_queries(self) -> None:
+        capelry = load_module("capelry_cli_ranking", CAPELRY_SCRIPT)
+        first_a = {"identifier": "urn:air:example:a", "score": 1, "description": "first payload"}
+        entry_b = {"identifier": "urn:air:example:b", "score": 50}
+        invalid_score = {"identifier": "urn:air:example:invalid", "score": "high"}
+        missing_score = {"identifier": "urn:air:example:missing"}
+        improved_a = {"identifier": "urn:air:example:a", "score": 99, "description": "later payload"}
+        missing_score_a = {"identifier": "urn:air:example:a"}
+        tie_one = {"identifier": "urn:air:example:tie-one", "score": 5}
+        tie_two = {"identifier": "urn:air:example:tie-two", "score": 5}
+        with mock.patch.object(
+            capelry,
+            "ard_search_entries",
+            side_effect=[
+                [first_a, entry_b, invalid_score, missing_score],
+                [improved_a, tie_one, tie_two],
+                [missing_score_a, tie_two],
+                [improved_a],
+            ],
+        ):
+            entries = capelry.collect_ard_search_results(
+                "https://registry.example",
+                object(),
+                ["primary", "expanded", "confirming", "expanded"],
+                per_query_limit=5,
+            )
+
+        self.assertEqual(
+            [entry["identifier"] for entry in entries],
+            [
+                "urn:air:example:a",
+                "urn:air:example:b",
+                "urn:air:example:tie-two",
+                "urn:air:example:tie-one",
+                "urn:air:example:invalid",
+                "urn:air:example:missing",
+            ],
+        )
+        self.assertEqual(entries[0]["score"], 99)
+        self.assertEqual(entries[0]["description"], "first payload")
+        self.assertEqual(entries[0]["_capelryMatchedQueries"], ["primary", "expanded", "confirming"])
+
+    def test_query_budget_has_hard_upper_and_lower_bounds(self) -> None:
+        capelry = load_module("capelry_cli_query_budget", CAPELRY_SCRIPT)
+        self.assertEqual(capelry.query_budget(-1), 1)
+        self.assertEqual(capelry.query_budget(999), 10)
+
+    def test_discover_parser_uses_cost_safe_defaults(self) -> None:
+        capelry = load_module("capelry_cli_discover_defaults", CAPELRY_SCRIPT)
+        args = capelry.build_parser().parse_args(["discover", "demo skill"])
+        self.assertEqual(args.top, 3)
+        self.assertEqual(args.max_queries, 4)
+        self.assertEqual(args.search_limit, 10)
+        self.assertIsNone(args.install_snippet)
+
+    def test_discovery_compaction_preserves_punctuation_and_unicode(self) -> None:
+        capelry = load_module("capelry_cli_query_fidelity", CAPELRY_SCRIPT)
+
+        self.assertEqual(capelry.compact_query("C++ build skills"), "C++ build")
+        self.assertEqual(capelry.compact_query("C# formatter capability"), "C# formatter")
+        self.assertEqual(capelry.compact_query("déploiement sécurisé skills"), "déploiement sécurisé")
+        self.assertEqual(capelry.compact_query("日本語 skill search"), "日本語 search")
+        self.assertEqual(
+            capelry.discover_queries("C++ build skills", ["C# formatter, 日本語 skill"], False, 3),
+            ["C++ build", "C# formatter", "日本語"],
+        )
+
+    def test_discover_default_budget_bounds_requests_and_candidate_volume(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "discover",
+                    "production readiness skills",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["queries"], ["production readiness", "devops rollout", "deployment preflight", "hardening docker"])
+        self.assertEqual(
+            payload["metrics"],
+            {"requestCount": 4, "perRequestLimit": 10, "candidateEnvelope": 40},
+        )
+        self.assertEqual(len(RegistryFixtureHandler.ard_requests), 4)
+        self.assertTrue(all(request["pageSize"] == 10 for request in RegistryFixtureHandler.ard_requests))
+
+    def test_discover_prioritizes_explicit_queries_inside_budget(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "discover",
+                    "feature planning skills",
+                    "--query",
+                    "acceptance criteria,test strategy",
+                    "--max-queries",
+                    "3",
+                    "--search-limit",
+                    "7",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["queries"], ["feature planning", "acceptance criteria", "test strategy"])
+        self.assertEqual(payload["metrics"]["candidateEnvelope"], 21)
+        self.assertEqual(len(RegistryFixtureHandler.ard_requests), 3)
+
+    def test_search_expand_respects_request_budget(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "search",
+                    "production readiness",
+                    "--expand",
+                    "--max-queries",
+                    "2",
+                    "--limit",
+                    "5",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["queries"], ["production readiness", "devops rollout"])
+        self.assertEqual(payload["metrics"], {"requestCount": 2, "perRequestLimit": 5, "candidateEnvelope": 10})
+        self.assertEqual(len(RegistryFixtureHandler.ard_requests), 2)
+
+    def test_search_agent_output_honors_relevance_and_install_flags(self) -> None:
+        with RegistryFixture() as fixture:
+            command = [
+                sys.executable,
+                str(CAPELRY_SCRIPT),
+                "--registry",
+                fixture.url,
+                "search",
+                "demo skill",
+                "--explain-relevance",
+                "--install-snippet",
+                "agents-project",
+            ]
+            text_result = subprocess.run(
+                command,
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+            json_result = subprocess.run(
+                [*command, "--json"],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        entry = json.loads(json_result.stdout)["entries"][0]
+        self.assertIn("matches demo", entry["relevance"])
+        self.assertIn("--target agents-project", entry["installSnippet"])
+        self.assertIn("relevance: matches demo", text_result.stdout)
+        self.assertIn("install:", text_result.stdout)
+        self.assertIn("--target agents-project", text_result.stdout)
+
+    def test_discover_does_not_assume_pi_install_target(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "discover",
+                    "demo skill",
+                    "--no-expand",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertNotIn("installCommand", payload["shortlist"][0])
+        self.assertNotIn("installSnippet", payload["entries"][0])
+        self.assertEqual(payload["metrics"]["requestCount"], 1)
+
+    def test_bulk_info_includes_install_decision_signals(self) -> None:
+        with RegistryFixture() as fixture:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "bulk-info",
+                    "capelry-ai/capelry-skills/zip-skill",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+            text_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "bulk-info",
+                    "capelry-ai/capelry-skills/zip-skill",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+
+        summary = json.loads(result.stdout)["shortlist"][0]
+        self.assertEqual(summary["trustState"], "checksum-only")
+        self.assertRegex(summary["checksum"], r"^[a-f0-9]{64}$")
+        self.assertIn("trustIdentity", summary)
+        self.assertIn("provenance: publishedFrom", text_result.stdout)
+
+    def test_detail_summary_matches_installer_source_aliases(self) -> None:
+        capelry = load_module("capelry_cli_detail_aliases", CAPELRY_SCRIPT)
+        entry = {
+            "identifier": "urn:air:example:exact",
+            "type": "application/vnd.capelry.skill-source+json",
+            "metadata": {
+                "com.capelry.slug": "owner/catalog/exact",
+                "com.capelry.sourceRepository": "https://github.com/owner/repo",
+                "com.capelry.sourcePath": "skills/exact",
+                "com.capelry.sourceRef": "v7",
+                "com.capelry.sourceArchiveUrl": "https://example.test/source.zip",
+                "com.capelry.sourceArchiveChecksumSha256": "a" * 64,
+            },
+            "trustManifest": {
+                "identity": "owner/repo",
+                "identityType": "https",
+                "provenance": [{"relation": "sourcePath", "sourceId": "skills/exact"}],
+            },
+        }
+
+        summary = capelry.ard_detail_summary(entry, "agents-project", "https://capelry.com")
+        self.assertEqual(summary["sourcePath"], "skills/exact")
+        self.assertEqual(summary["sourceRef"], "v7")
+        self.assertEqual(summary["sourceArchiveUrl"], "https://example.test/source.zip")
+        self.assertEqual(summary["checksum"], "a" * 64)
+        self.assertEqual(summary["trustIdentity"], "owner/repo")
+        self.assertIn("--target agents-project", summary["installCommand"])
+
+        root_entry = {**entry, "metadata": {**entry["metadata"]}}
+        root_entry["metadata"].pop("com.capelry.sourcePath")
+        root_summary = capelry.ard_detail_summary(root_entry)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            capelry.print_ard_detail_summaries([root_summary])
+        self.assertIn("source ref: v7", output.getvalue())
+
+        conflicting_entry = {
+            "identifier": "urn:air:example:descriptor-source",
+            "source": "https://github.com/claimed/repo",
+            "type": "application/vnd.capelry.skill-source+json",
+            "data": {"repository": "https://github.com/actual/repo"},
+            "metadata": {
+                "com.capelry.slug": "owner/catalog/descriptor-source",
+                "com.capelry.sourceRepository": "https://github.com/metadata/repo",
+            },
+        }
+        descriptor_summary = capelry.ard_detail_summary(conflicting_entry)
+        self.assertEqual(descriptor_summary["source"], "https://github.com/actual/repo")
+        info_args = SimpleNamespace(
+            ref="owner/catalog/descriptor-source",
+            registry="https://capelry.com",
+            json_output=True,
+            install_snippet=None,
+        )
+        output = io.StringIO()
+        with mock.patch.object(capelry, "ard_agents_entries", return_value=[conflicting_entry]):
+            with contextlib.redirect_stdout(output):
+                capelry.command_info(info_args)
+        self.assertEqual(json.loads(output.getvalue())["entry"]["source"], "https://github.com/actual/repo")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.object(capelry, "download_github_archive_path") as download:
+                capelry.install_ard_source_entry(conflicting_entry, Path(tmpdir) / "skill", force=False)
+        download.assert_called_once_with("actual", "repo", "", "main", mock.ANY, False)
 
     def test_three_segment_slug_install_name_uses_resource_segment(self) -> None:
         capelry = load_module("capelry_cli_install_name", CAPELRY_SCRIPT)
@@ -2050,7 +2482,7 @@ class CapelryScriptTests(unittest.TestCase):
             for line in manifest.splitlines()
             if line.strip().startswith("version:")
         )
-        self.assertEqual(manifest_version, "2.1.0")
+        self.assertEqual(manifest_version, "2.2.0")
         self.assertIn(f"capelry-{manifest_version}.zip", manifest)
         entries = catalog["entries"]
         self.assertEqual(len(entries), 1)
@@ -2133,11 +2565,9 @@ class CapelryScriptTests(unittest.TestCase):
                     raise KeyboardInterrupt()
                 return original_move(source, target)
 
-            with (
-                mock.patch.object(capelry.shutil, "move", side_effect=interrupt_second_move),
-                self.assertRaises(KeyboardInterrupt),
-            ):
-                capelry.replace_skill_dir(dest, new_dir, keep_backup=False)
+            with mock.patch.object(capelry.shutil, "move", side_effect=interrupt_second_move):
+                with self.assertRaises(KeyboardInterrupt):
+                    capelry.replace_skill_dir(dest, new_dir, keep_backup=False)
 
             self.assertEqual((dest / "marker.txt").read_text(encoding="utf-8"), "old")
 
@@ -2170,7 +2600,7 @@ class CapelryScriptTests(unittest.TestCase):
             backup = Path(payload["backup"])
             self.assertTrue((dest / "SKILL.md").exists())
             self.assertTrue((dest / "scripts" / "capelry.py").exists())
-            self.assertEqual(payload["sourceVersion"], "2.1.0")
+            self.assertEqual(payload["sourceVersion"], "2.2.0")
             self.assertEqual(payload["destVersion"], "0.0.1")
             self.assertEqual(payload["backupPolicy"], "archive")
             self.assertTrue(backup.exists())
@@ -2298,6 +2728,210 @@ class CapelryScriptTests(unittest.TestCase):
             self.assertEqual(source_path, "skills/capelry")
             self.assertTrue((dest / "SKILL.md").exists())
             self.assertTrue((dest / "scripts" / "capelry.py").exists())
+
+    def test_empty_discovery_prints_queries_and_budget(self) -> None:
+        capelry = load_module("capelry_cli_empty_discovery", CAPELRY_SCRIPT)
+        args = capelry.build_parser().parse_args(
+            ["--registry", "https://registry.example", "discover", "C++ skills", "--no-expand"]
+        )
+        output = io.StringIO()
+        with mock.patch.object(capelry, "collect_ard_search_results", return_value=[]), contextlib.redirect_stdout(output):
+            capelry.command_discover(args)
+
+        text = output.getvalue()
+        self.assertIn("Queries: C++", text)
+        self.assertIn("Search budget: 1 request(s) x 10 results", text)
+        self.assertIn("No ARD entries found.", text)
+
+    def test_catalog_keep_going_records_controlled_timeout_and_continues(self) -> None:
+        capelry = load_module("capelry_cli_catalog_timeout", CAPELRY_SCRIPT)
+        entries = [
+            {
+                "identifier": "urn:air:example:one",
+                "type": "application/vnd.capelry.skill-source+json",
+                "metadata": {"com.capelry.slug": "owner/catalog/one"},
+            },
+            {
+                "identifier": "urn:air:example:two",
+                "type": "application/vnd.capelry.skill-source+json",
+                "metadata": {"com.capelry.slug": "owner/catalog/two"},
+            },
+        ]
+        args = capelry.build_parser().parse_args(
+            [
+                "--registry",
+                "https://registry.example",
+                "install-catalog",
+                "owner/catalog",
+                "--target",
+                "agents-project",
+                "--yes",
+                "--keep-going",
+                "--json",
+            ]
+        )
+        successful = (
+            Path(".agents/skills/two"),
+            "ARD source archive descriptor at main",
+            None,
+            {"name": "two", "warnings": []},
+        )
+        output = io.StringIO()
+        with mock.patch.object(capelry, "catalog_install_entries", return_value=entries):
+            with mock.patch.object(capelry, "path_exists", return_value=False):
+                with mock.patch.object(
+                    capelry,
+                    "install_ard_entry_for_args",
+                    side_effect=[SystemExit("Unable to reach archive: timed out"), successful],
+                ):
+                    with contextlib.redirect_stdout(output):
+                        capelry.command_install_catalog(args)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["errorCount"], 1)
+        self.assertIn("timed out", payload["errors"][0]["message"])
+        self.assertEqual(payload["installed"][0]["skillName"], "two")
+
+    def test_three_segment_slug_installs_to_selected_target_without_dest(self) -> None:
+        with RegistryFixture() as fixture, tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAPELRY_SCRIPT),
+                    "--registry",
+                    fixture.url,
+                    "install",
+                    "capelry-ai/capelry-skills/source-skill",
+                    "--target",
+                    "agents-project",
+                    "--json",
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+                cwd=tmpdir,
+                env=clean_env(),
+            )
+            destination = Path(tmpdir) / ".agents" / "skills" / "source-skill"
+            self.assertTrue((destination / "SKILL.md").is_file())
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["skillName"], "source-skill")
+        self.assertEqual(payload["target"], "agents-project")
+        self.assertEqual(Path(payload["destination"]), Path(".agents/skills/source-skill"))
+
+    def test_self_update_archive_timeout_uses_github_api_fallback(self) -> None:
+        capelry = load_module("capelry_cli_self_update_timeout", CAPELRY_SCRIPT)
+        args = capelry.build_parser().parse_args(["self-update", "--force", "--yes", "--json"])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "capelry"
+            info = {
+                "status": "update-available",
+                "skillDir": str(skill_dir),
+                "remoteRef": "v2.1.0",
+                "remoteVersion": "2.1.0",
+            }
+            with mock.patch.object(capelry, "self_update_info", return_value=info):
+                with mock.patch.object(capelry, "source_checkout_root", return_value=None):
+                    with mock.patch.object(
+                        capelry,
+                        "download_github_archive_path",
+                        side_effect=SystemExit("Unable to reach codeload: timed out"),
+                    ):
+                        with mock.patch.object(capelry, "download_github_path") as fallback:
+                            with mock.patch.object(capelry, "validate_downloaded_self_skill"):
+                                with mock.patch.object(capelry, "replace_skill_dir", return_value=None):
+                                    with contextlib.redirect_stdout(io.StringIO()):
+                                        capelry.command_self_update(args)
+
+        fallback.assert_called_once()
+
+    def test_package_builder_excludes_caches_and_smoke_tests_archive(self) -> None:
+        packager = load_module("capelry_package_builder", PACKAGE_SCRIPT)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fixture = root / "fixture"
+            fixture.mkdir()
+            for name in packager.ROOT_FILES:
+                (fixture / name).write_text("fixture\n", encoding="utf-8")
+            (fixture / "scripts").mkdir()
+            for name in ("keep.py", "cache.pyc", "backup.bak", "editor.swp", "temporary.tmp", "nested.zip", "tilde~"):
+                (fixture / "scripts" / name).write_text("fixture\n", encoding="utf-8")
+            fixture_names = {path.relative_to(fixture).as_posix() for path in packager.archive_members(fixture)}
+            self.assertIn("scripts/keep.py", fixture_names)
+            self.assertFalse(any(name in fixture_names for name in {
+                "scripts/cache.pyc",
+                "scripts/backup.bak",
+                "scripts/editor.swp",
+                "scripts/temporary.tmp",
+                "scripts/nested.zip",
+                "scripts/tilde~",
+            }))
+
+            external_skill = root / "external-SKILL.md"
+            external_skill.write_text("external\n", encoding="utf-8")
+            root_symlink_fixture = root / "root-symlink-fixture"
+            root_symlink_fixture.mkdir()
+            for name in packager.ROOT_FILES:
+                (root_symlink_fixture / name).write_text("fixture\n", encoding="utf-8")
+            (root_symlink_fixture / "SKILL.md").unlink()
+            try:
+                (root_symlink_fixture / "SKILL.md").symlink_to(external_skill)
+            except OSError:
+                pass
+            else:
+                with self.assertRaisesRegex(SystemExit, "Refusing to package symlink: SKILL.md"):
+                    packager.archive_members(root_symlink_fixture)
+
+            external_assets = root / "external-assets"
+            external_assets.mkdir()
+            (external_assets / "credentials.json").write_text("secret\n", encoding="utf-8")
+            directory_symlink_fixture = root / "directory-symlink-fixture"
+            directory_symlink_fixture.mkdir()
+            for name in packager.ROOT_FILES:
+                (directory_symlink_fixture / name).write_text("fixture\n", encoding="utf-8")
+            try:
+                (directory_symlink_fixture / "assets").symlink_to(external_assets, target_is_directory=True)
+            except OSError:
+                pass
+            else:
+                with self.assertRaisesRegex(SystemExit, "Refusing to package symlink: assets"):
+                    packager.archive_members(directory_symlink_fixture)
+
+            output = root / "capelry.zip"
+            subprocess.run(
+                [sys.executable, str(PACKAGE_SCRIPT), "--output", str(output)],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=clean_env(),
+            )
+            with zipfile.ZipFile(output) as archive:
+                names = archive.namelist()
+                self.assertEqual(names, sorted(names))
+                self.assertIn("SKILL.md", names)
+                self.assertIn("scripts/package_skill.py", names)
+                self.assertIn("references/cli.md", names)
+                self.assertIn("references/harnesses.md", names)
+                self.assertIn("references/maintenance.md", names)
+                self.assertFalse(any("__pycache__" in name or name.endswith((".pyc", ".pyo", ".zip")) for name in names))
+                extracted = root / "capelry"
+                archive.extractall(extracted)
+
+            packaged_cli = extracted / "scripts" / "capelry.py"
+            for arguments in (
+                ["validate-skill", str(extracted), "--json"],
+                ["--help"],
+                ["targets", "--json"],
+            ):
+                subprocess.run(
+                    [sys.executable, str(packaged_cli), *arguments],
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                    env=clean_env(),
+                )
 
 
 if __name__ == "__main__":
