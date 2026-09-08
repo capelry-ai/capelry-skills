@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import sys
 import tempfile
 import time
@@ -21,13 +22,17 @@ import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
-CAPELRY_SKILL_VERSION = "2.1.0"
+CAPELRY_SKILL_VERSION = "2.2.0"
 DEFAULT_REGISTRY = "https://capelry.com"
 SELF_GITHUB_REPOSITORY = "capelry-ai/capelry-skills"
 SELF_SOURCE_PATH = "skills/capelry"
 SELF_DEFAULT_REF = "main"
 API_SEARCH_LIMIT_MIN = 1
 API_SEARCH_LIMIT_MAX = 100
+DEFAULT_QUERY_BUDGET = 4
+MAX_QUERY_BUDGET = 10
+DEFAULT_DISCOVERY_TOP = 3
+DEFAULT_DISCOVERY_SEARCH_LIMIT = 10
 ARD_SKILL_MEDIA_TYPES = (
     "application/vnd.capelry.skill+zip",
     "application/vnd.capelry.skill-source+json",
@@ -52,6 +57,7 @@ ARD_CATALOG_URL_METADATA = "com.capelry.catalogUrl"
 ARD_SOURCE_REPOSITORY_METADATA = "com.capelry.sourceRepository"
 ARD_SOURCE_REPOSITORY_FULL_NAME_METADATA = "com.capelry.sourceRepositoryFullName"
 DEFAULT_HTTP_USER_AGENT = "capelry-client"
+DEFAULT_HTTP_TIMEOUT_SECONDS = 30
 HTTP_USER_AGENT = DEFAULT_HTTP_USER_AGENT
 
 TARGETS: dict[str, dict[str, str]] = {
@@ -348,6 +354,28 @@ def capelry_user_agent(default: str = DEFAULT_HTTP_USER_AGENT) -> str:
     return default
 
 
+def http_timeout_seconds() -> int:
+    raw = os.environ.get("CAPELRY_HTTP_TIMEOUT", str(DEFAULT_HTTP_TIMEOUT_SECONDS)).strip()
+    try:
+        timeout = int(raw)
+    except ValueError as error:
+        raise SystemExit("CAPELRY_HTTP_TIMEOUT must be an integer from 1 to 300 seconds") from error
+    if not 1 <= timeout <= 300:
+        raise SystemExit("CAPELRY_HTTP_TIMEOUT must be an integer from 1 to 300 seconds")
+    return timeout
+
+
+def network_error_reason(error: BaseException) -> object:
+    return getattr(error, "reason", error)
+
+
+def http_error_body(error: urllib.error.HTTPError) -> str:
+    try:
+        return error.read().decode("utf-8", errors="replace")
+    except (TimeoutError, socket.timeout):
+        return "<response body timed out>"
+
+
 def http_headers(url: str, *, user_agent: str = DEFAULT_HTTP_USER_AGENT) -> dict[str, str]:
     headers = {"User-Agent": capelry_user_agent(user_agent)}
     parsed = urllib.parse.urlparse(url)
@@ -366,17 +394,13 @@ def http_headers(url: str, *, user_agent: str = DEFAULT_HTTP_USER_AGENT) -> dict
 def fetch_bytes(url: str) -> bytes:
     request = urllib.request.Request(url, headers=http_headers(url))
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=http_timeout_seconds()) as response:
             return response.read()
     except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
+        body = http_error_body(error)
         raise SystemExit(f"HTTP {error.code} for {url}\n{body}") from error
-    except urllib.error.URLError as error:
-        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
-
-
-def fetch_json(url: str) -> Any:
-    return json.loads(fetch_bytes(url).decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        raise SystemExit(f"Unable to reach {url}: {network_error_reason(error)}") from error
 
 
 def github_headers(accept: str | None = "application/vnd.github+json") -> dict[str, str]:
@@ -397,49 +421,27 @@ def github_headers(accept: str | None = "application/vnd.github+json") -> dict[s
 def fetch_github_json(url: str, *, allow_404: bool = False) -> Any:
     request = urllib.request.Request(url, headers=github_headers())
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=http_timeout_seconds()) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         if allow_404 and error.code == 404:
             return None
-        body = error.read().decode("utf-8", errors="replace")
+        body = http_error_body(error)
         raise SystemExit(f"HTTP {error.code} for {url}\n{body}") from error
-    except urllib.error.URLError as error:
-        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
+    except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        raise SystemExit(f"Unable to reach {url}: {network_error_reason(error)}") from error
 
 
 def fetch_github_bytes(url: str) -> bytes:
     request = urllib.request.Request(url, headers=github_headers("application/octet-stream"))
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=http_timeout_seconds()) as response:
             return response.read()
     except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
+        body = http_error_body(error)
         raise SystemExit(f"HTTP {error.code} for {url}\n{body}") from error
-    except urllib.error.URLError as error:
-        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
-
-
-def post_json(url: str, payload: dict[str, Any]) -> Any:
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            **http_headers(url),
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        body_text = error.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"HTTP {error.code} for {url}\n{body_text}") from error
-    except urllib.error.URLError as error:
-        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
+    except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        raise SystemExit(f"Unable to reach {url}: {network_error_reason(error)}") from error
 
 
 class ArdApiError(SystemExit):
@@ -470,13 +472,13 @@ def ard_error_message(url: str, status: int, body_text: str) -> str:
 def fetch_ard_json(url: str) -> Any:
     request = urllib.request.Request(url, headers={**http_headers(url), "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=http_timeout_seconds()) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
-        body_text = error.read().decode("utf-8", errors="replace")
+        body_text = http_error_body(error)
         raise ArdApiError(error.code, ard_error_message(url, error.code, body_text)) from error
-    except urllib.error.URLError as error:
-        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
+    except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        raise SystemExit(f"Unable to reach {url}: {network_error_reason(error)}") from error
 
 
 def post_ard_json(url: str, payload: dict[str, Any]) -> Any:
@@ -492,84 +494,17 @@ def post_ard_json(url: str, payload: dict[str, Any]) -> Any:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=http_timeout_seconds()) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
-        body_text = error.read().decode("utf-8", errors="replace")
+        body_text = http_error_body(error)
         raise ArdApiError(error.code, ard_error_message(url, error.code, body_text)) from error
-    except urllib.error.URLError as error:
-        raise SystemExit(f"Unable to reach {url}: {error.reason}") from error
+    except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+        raise SystemExit(f"Unable to reach {url}: {network_error_reason(error)}") from error
 
 
 def print_json(payload: Any) -> None:
     print(json.dumps(payload, indent=2, ensure_ascii=False))
-
-
-def parse_ref(value: str) -> tuple[str, str, str | None]:
-    ref, _, version = value.partition("@")
-    if "/" not in ref:
-        raise SystemExit("Capability ref must be an ARD slug such as namespace/catalog/resource, optionally @version")
-    namespace, name = ref.split("/", 1)
-    if not namespace or not name:
-        raise SystemExit("Capability ref must be an ARD slug such as namespace/catalog/resource")
-    return namespace, name, version or None
-
-
-def capability_ref(capability: dict[str, Any]) -> str:
-    return f"{capability.get('namespace')}/{capability.get('name')}"
-
-
-def capability_version(capability: dict[str, Any]) -> str:
-    latest = capability.get("latestVersion") or {}
-    version = latest.get("version")
-    return version if isinstance(version, str) and version else "?"
-
-
-def capability_status(capability: dict[str, Any]) -> str:
-    latest = capability.get("latestVersion") or {}
-    status = latest.get("validationStatus")
-    return status if isinstance(status, str) and status else "?"
-
-
-def capability_type(capability: dict[str, Any]) -> str:
-    package_type = capability.get("packageType")
-    return package_type if isinstance(package_type, str) and package_type else "capability"
-
-
-def source_repository(capability: dict[str, Any]) -> str:
-    source = capability.get("source") or {}
-    repository = source.get("repository")
-    return repository if isinstance(repository, str) else ""
-
-
-def source_path(capability: dict[str, Any]) -> str:
-    source = capability.get("source") or {}
-    path = source.get("path")
-    return path if isinstance(path, str) else ""
-
-
-def github_slug_from_repository(repository: str) -> str:
-    match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$", repository)
-    if not match:
-        return ""
-    return f"{match.group('owner')}/{match.group('repo')}"
-
-
-def source_slug(capability: dict[str, Any]) -> str:
-    repository = source_repository(capability)
-    return github_slug_from_repository(repository) or repository
-
-
-def capability_detail(base: str, ref: str) -> dict[str, Any]:
-    raise SystemExit("Legacy Capelry compatibility API was removed in v2.0.1; use ARD identifiers or slugs.")
-
-
-def latest_version(capability: dict[str, Any]) -> str:
-    latest = capability.get("latestVersion") or {}
-    version = latest.get("version")
-    if not isinstance(version, str) or not version:
-        raise SystemExit("Capability has no latest version")
-    return version
 
 
 def clamp_api_search_limit(value: int | None) -> int | None:
@@ -582,18 +517,16 @@ def result_limit(value: int) -> int:
     return max(value, API_SEARCH_LIMIT_MIN)
 
 
-def search_capabilities(
-    base: str,
-    query: str,
-    *,
-    package_type: str | None = None,
-    status: str | None = None,
-    domain: str | None = None,
-    phase: str | None = None,
-    source: str | None = None,
-    limit: int | None = None,
-) -> list[dict[str, Any]]:
-    raise SystemExit("Legacy Capelry compatibility API was removed in v2.0.1; use ARD search.")
+def query_budget(value: int) -> int:
+    return min(max(value, 1), MAX_QUERY_BUDGET)
+
+
+def search_cost_metrics(queries: list[str], per_request_limit: int) -> dict[str, int]:
+    return {
+        "requestCount": len(queries),
+        "perRequestLimit": per_request_limit,
+        "candidateEnvelope": len(queries) * per_request_limit,
+    }
 
 
 def split_arg_values(values: list[str] | None) -> list[str]:
@@ -835,9 +768,18 @@ def ard_page_url(base: str, entry: dict[str, Any]) -> str | None:
     return api_url(base, f"/c/{quoted_slug_path(slug)}")
 
 
-def ard_entry_output(entry: dict[str, Any], base: str | None = None) -> dict[str, Any]:
+def ard_entry_output(
+    entry: dict[str, Any],
+    base: str | None = None,
+    *,
+    install_target: str | None = None,
+    query: str | None = None,
+    explain_relevance: bool = False,
+) -> dict[str, Any]:
+    identifier = entry.get("identifier")
+    slug = ard_slug(entry)
     output = {
-        "identifier": entry.get("identifier"),
+        "identifier": identifier,
         "displayName": entry.get("displayName"),
         "version": entry.get("version"),
         "mediaType": ard_entry_media_type(entry),
@@ -847,16 +789,29 @@ def ard_entry_output(entry: dict[str, Any], base: str | None = None) -> dict[str
         "source": ard_source_repository(entry),
         "sourceRepositoryFullName": ard_source_repository_full_name(entry),
         "trustState": ard_trust_state(entry),
-        "slug": ard_slug(entry),
+        "slug": slug,
         "catalogPath": ard_catalog_path(entry),
         "catalogSlug": ard_catalog_slug(entry),
         "catalogUrl": ard_catalog_url(entry),
         "page": ard_page_url(base, entry) if base else None,
     }
+    matched_queries = entry.get("_capelryMatchedQueries")
+    if isinstance(matched_queries, list) and matched_queries:
+        output["matchedQueries"] = matched_queries
+    if install_target and (slug or isinstance(identifier, str)):
+        output["installSnippet"] = install_snippet(slug or str(identifier), install_target)
+    if explain_relevance and query:
+        output["relevance"] = ard_relevance_reason(entry, query)
     return {key: value for key, value in output.items() if value is not None}
 
 
-def print_ard_entries(entries: list[dict[str, Any]]) -> None:
+def print_ard_entries(
+    entries: list[dict[str, Any]],
+    *,
+    install_target: str | None = None,
+    query: str | None = None,
+    explain_relevance: bool = False,
+) -> None:
     for entry in entries:
         identifier = entry.get("identifier") or "?"
         display_name = entry.get("displayName") or ""
@@ -883,6 +838,12 @@ def print_ard_entries(entries: list[dict[str, Any]]) -> None:
         description = entry.get("description")
         if isinstance(description, str) and description:
             print(f"  {description}")
+        if explain_relevance and query:
+            print(f"  relevance: {ard_relevance_reason(entry, query)}")
+        slug = ard_slug(entry)
+        identifier = entry.get("identifier")
+        if install_target and (slug or isinstance(identifier, str)):
+            print(f"  install: {install_snippet(slug or str(identifier), install_target)}")
 
 
 def is_ard_identifier(value: str) -> bool:
@@ -895,10 +856,53 @@ def ard_resolution_field(value: str) -> str:
 
 def ard_detail_summary(entry: dict[str, Any], install_target: str | None = None, base: str | None = None) -> dict[str, Any]:
     metadata = ard_metadata(entry)
+    descriptor = ard_source_descriptor(entry)
+    trust_manifest = entry.get("trustManifest")
+    trust_manifest = trust_manifest if isinstance(trust_manifest, dict) else {}
+    provenance = trust_manifest.get("provenance")
+    provenance = provenance[:3] if isinstance(provenance, list) else []
     identifier = entry.get("identifier") if isinstance(entry.get("identifier"), str) else "?"
     slug = ard_slug(entry)
     detail_url = metadata.get("com.capelry.detailUrl") or metadata.get("metadata.com.capelry.detailUrl")
-    source = ard_source_repository(entry)
+    source = source_descriptor_value(
+        descriptor,
+        entry,
+        "repository",
+        "sourceRepository",
+        "com.capelry.sourceRepository",
+        "metadata.com.capelry.sourceRepository",
+    ) or ard_source_repository(entry)
+    source_path = source_descriptor_value(
+        descriptor,
+        entry,
+        "path",
+        "sourcePath",
+        "com.capelry.sourcePath",
+        "metadata.com.capelry.sourcePath",
+    )
+    source_ref = source_descriptor_value(
+        descriptor,
+        entry,
+        "ref",
+        "sourceRef",
+        "defaultBranch",
+        "com.capelry.sourceRef",
+        "metadata.com.capelry.sourceRef",
+    )
+    source_archive_url = source_descriptor_value(
+        descriptor,
+        entry,
+        "archiveUrl",
+        "com.capelry.sourceArchiveUrl",
+    )
+    source_checksum = source_descriptor_value(
+        descriptor,
+        entry,
+        "archiveChecksumSha256",
+        "checksumSha256",
+        "com.capelry.sourceArchiveChecksumSha256",
+        "metadata.com.capelry.sourceArchiveChecksumSha256",
+    ) or ard_archive_checksum(entry)
     page = detail_url if isinstance(detail_url, str) and detail_url else (ard_page_url(base, entry) if base else None)
     output = {
         "identifier": identifier,
@@ -909,12 +913,20 @@ def ard_detail_summary(entry: dict[str, Any], install_target: str | None = None,
         "summary": entry.get("description") or entry.get("displayName") or "",
         "source": source,
         "sourceRepositoryFullName": ard_source_repository_full_name(entry),
+        "sourcePath": source_path,
+        "sourceRef": source_ref,
+        "sourceArchiveUrl": source_archive_url,
         "catalogPath": ard_catalog_path(entry),
         "catalogSlug": ard_catalog_slug(entry),
         "catalogUrl": ard_catalog_url(entry),
         "page": page,
         "score": entry.get("score"),
         "trustState": ard_trust_state(entry),
+        "trustIdentity": trust_manifest.get("identity"),
+        "trustIdentityType": trust_manifest.get("identityType"),
+        "provenance": provenance or None,
+        "checksum": source_checksum,
+        "checksumEvidence": "advertised; verified only during download" if source_checksum else None,
         "slug": slug,
     }
     if install_target:
@@ -941,6 +953,25 @@ def print_ard_detail_summaries(summaries: list[dict[str, Any]]) -> None:
             print(f"   score: {item['score']}")
         if item.get("trustState"):
             print(f"   trust: {item['trustState']}")
+        if item.get("trustIdentity"):
+            identity_type = f" ({item['trustIdentityType']})" if item.get("trustIdentityType") else ""
+            print(f"   trust identity: {item['trustIdentity']}{identity_type}")
+        for provenance in item.get("provenance") or []:
+            if not isinstance(provenance, dict):
+                continue
+            relation = provenance.get("relation") or "provenance"
+            source_id = provenance.get("sourceId") or provenance.get("url") or provenance.get("source")
+            if source_id:
+                print(f"   provenance: {relation} {source_id}")
+        if item.get("checksum"):
+            print(f"   checksum (advertised): {item['checksum']}")
+        if item.get("sourceArchiveUrl"):
+            print(f"   source archive: {item['sourceArchiveUrl']}")
+        if item.get("sourcePath"):
+            source_ref = f"@{item['sourceRef']}" if item.get("sourceRef") else ""
+            print(f"   source path: {item['sourcePath']}{source_ref}")
+        elif item.get("sourceRef"):
+            print(f"   source ref: {item['sourceRef']}")
         if item.get("slug"):
             print(f"   slug: {item['slug']}")
         if item.get("installCommand"):
@@ -963,8 +994,25 @@ def dedupe(values: list[str]) -> list[str]:
     return result
 
 
+def ard_relevance_reason(entry: dict[str, Any], query: str) -> str:
+    fields = [
+        entry.get("displayName") or "",
+        entry.get("description") or "",
+        ard_slug(entry) or "",
+        ard_catalog_path(entry) or "",
+        ard_source_repository(entry) or "",
+    ]
+    searchable = " ".join(str(field).lower() for field in fields if field)
+    matched_terms = dedupe([token for token in tokenize(query) if token in searchable])
+    reasons = ["matches " + ", ".join(matched_terms[:6])] if matched_terms else []
+    matched_queries = entry.get("_capelryMatchedQueries")
+    if isinstance(matched_queries, list) and len(matched_queries) > 1:
+        reasons.append("found via " + ", ".join(str(item) for item in matched_queries[:4]))
+    return "; ".join(reasons) if reasons else "returned by registry search"
+
+
 def expanded_queries(query: str) -> list[str]:
-    """Return a bounded set of related search queries for agent discovery."""
+    """Return related search terms; callers apply their explicit request budget."""
     seeds = [query]
     tokens = tokenize(query)
     lower = query.lower()
@@ -981,99 +1029,6 @@ def expanded_queries(query: str) -> list[str]:
 
     # Keep network use predictable while still covering common adjacent terms.
     return dedupe(seeds)[:16]
-
-
-def normalize_source_filter(value: str) -> str:
-    lower = value.strip().lower().removesuffix(".git").strip("/")
-    match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+)", lower)
-    if match:
-        return f"{match.group('owner')}/{match.group('repo')}"
-    return lower.removeprefix("https://").removeprefix("http://").strip("/")
-
-
-def source_filter_aliases(value: str) -> list[str]:
-    """Return normalized source forms accepted by --source.
-
-    In addition to GitHub owner/repo slugs, accept the documented
-    `github/<owner-or-repo>` shorthand used by agents to mean "from GitHub".
-    """
-    normalized = normalize_source_filter(value)
-    aliases = [normalized]
-    if normalized.startswith("github/"):
-        aliases.append(normalized.removeprefix("github/"))
-    return dedupe(aliases)
-
-
-def matches_type(capability: dict[str, Any], expected: str | None) -> bool:
-    if not expected:
-        return True
-    return capability_type(capability).lower() == expected.lower()
-
-
-def matches_status(capability: dict[str, Any], expected: str | None) -> bool:
-    if not expected:
-        return True
-    return capability_status(capability).lower() == expected.lower()
-
-
-def matches_source(capability: dict[str, Any], expected: str | None) -> bool:
-    if not expected:
-        return True
-    wanted_aliases = source_filter_aliases(expected)
-    candidate_aliases: list[str] = []
-    for candidate in (source_repository(capability), source_slug(capability), source_path(capability)):
-        if candidate:
-            candidate_aliases.extend(source_filter_aliases(candidate))
-    return any(wanted in candidate for wanted in wanted_aliases for candidate in candidate_aliases)
-
-
-def filter_capabilities(capabilities: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
-    package_type = getattr(args, "package_type", None)
-    status = getattr(args, "status", None)
-    source = getattr(args, "source", None)
-    return [
-        capability
-        for capability in capabilities
-        if matches_type(capability, package_type)
-        and matches_status(capability, status)
-        and matches_source(capability, source)
-    ]
-
-
-def text_for_relevance(capability: dict[str, Any]) -> str:
-    fields = [
-        capability_ref(capability),
-        capability.get("summary") or "",
-        capability.get("description") or "",
-        source_repository(capability),
-        source_path(capability),
-    ]
-    return " ".join(str(field).lower() for field in fields if field)
-
-
-def relevance_reasons(capability: dict[str, Any], query: str, args: argparse.Namespace) -> str:
-    reasons: list[str] = []
-    text = text_for_relevance(capability)
-    matched_terms = [token for token in tokenize(query) if token in text]
-    if matched_terms:
-        reasons.append("matches " + ", ".join(dedupe(matched_terms)[:6]))
-
-    matched_queries = capability.get("_capelryMatchedQueries") or []
-    if isinstance(matched_queries, list) and matched_queries:
-        display_queries = [str(item) for item in matched_queries[:4]]
-        if display_queries != [query]:
-            reasons.append("found via " + ", ".join(display_queries))
-
-    if getattr(args, "package_type", None):
-        reasons.append(f"type={capability_type(capability)}")
-    if getattr(args, "status", None):
-        reasons.append(f"status={capability_status(capability)}")
-    if getattr(args, "source", None):
-        slug = source_slug(capability)
-        if slug:
-            reasons.append(f"source={slug}")
-
-    return "; ".join(reasons) if reasons else "returned by registry search"
 
 
 def script_invocation() -> str:
@@ -1097,107 +1052,12 @@ def parse_ref_list(values: list[str]) -> list[str]:
     return result
 
 
-def bulk_capability_details(base: str, refs: list[str]) -> dict[str, Any]:
-    raise SystemExit("Legacy Capelry compatibility API was removed in v2.0.1; use ARD info or discover.")
-
-
-def capability_output(
-    capability: dict[str, Any],
-    base: str,
-    args: argparse.Namespace,
-) -> dict[str, Any]:
-    output = {key: value for key, value in capability.items() if not key.startswith("_capelry")}
-    ref = capability_ref(capability)
-    output["ref"] = ref
-    output["version"] = capability_version(capability)
-    output["status"] = capability_status(capability)
-    output["type"] = capability_type(capability)
-    output["sourceSlug"] = source_slug(capability) or None
-    output["page"] = f"{base}/{ref}"
-
-    matched_queries = capability.get("_capelryMatchedQueries")
-    if matched_queries:
-        output["matchedQueries"] = matched_queries
-    install_target = getattr(args, "install_snippet", None)
-    if install_target:
-        output["installSnippet"] = install_snippet(ref, install_target)
-    if getattr(args, "explain_relevance", False):
-        output["relevance"] = relevance_reasons(capability, getattr(args, "query", ref), args)
-    return output
-
-
-def action_metadata_for_entry(entry: dict[str, Any]) -> dict[str, Any]:
-    action_metadata = entry.get("actionMetadata") or {}
-    return action_metadata if isinstance(action_metadata, dict) else {}
-
-
-def detail_summary(entry: dict[str, Any], base: str, install_target: str | None) -> dict[str, Any]:
-    capability = entry.get("capability") or entry
-    if not isinstance(capability, dict):
-        capability = {}
-    ref = entry.get("ref") if isinstance(entry.get("ref"), str) else capability_ref(capability)
-    latest = capability.get("latestVersion") or {}
-    action_metadata = action_metadata_for_entry(entry)
-    safety = action_metadata.get("safetyTrustSignals") or {}
-    checksum = latest.get("checksumSha256") or safety.get("checksumSha256")
-    repository = source_repository(capability) or safety.get("sourceRepository") or ""
-    summary = capability.get("summary") or capability.get("description") or ""
-
-    output = {
-        "ref": ref,
-        "name": ref,
-        "version": latest.get("version") or capability_version(capability),
-        "type": capability_type(capability),
-        "status": latest.get("validationStatus") or safety.get("validationStatus") or capability_status(capability),
-        "summary": summary,
-        "source": repository,
-        "sourcePath": source_path(capability) or None,
-        "page": f"{base}/{ref}",
-        "checksum": checksum,
-    }
-    if install_target:
-        output["installCommand"] = install_snippet(ref, install_target)
-    return output
-
-
-def print_detail_summaries(summaries: list[dict[str, Any]]) -> None:
-    for index, item in enumerate(summaries, start=1):
-        print(f"{index}. {item['name']}@{item.get('version', '?')}")
-        print(f"   type: {item.get('type', '?')}")
-        print(f"   summary: {item.get('summary') or ''}")
-        if item.get("source"):
-            print(f"   source: {item['source']}")
-        if item.get("sourcePath"):
-            print(f"   source path: {item['sourcePath']}")
-        print(f"   page: {item['page']}")
-        if item.get("checksum"):
-            print(f"   checksum: {item['checksum']}")
-        if item.get("installCommand"):
-            print(f"   install: {item['installCommand']}")
-
-
-def collect_search_results(base: str, args: argparse.Namespace, queries: list[str], per_query_limit: int | None = None) -> list[dict[str, Any]]:
-    capabilities_by_ref: dict[str, dict[str, Any]] = {}
-    for query in queries:
-        for item in search_capabilities(
-            base,
-            query,
-            package_type=getattr(args, "package_type", None),
-            status=getattr(args, "status", None),
-            domain=getattr(args, "domain", None),
-            phase=getattr(args, "phase", None),
-            source=getattr(args, "source", None),
-            limit=per_query_limit,
-        ):
-            ref = capability_ref(item)
-            if ref == "None/None":
-                continue
-            if ref not in capabilities_by_ref:
-                copy = dict(item)
-                copy["_capelryMatchedQueries"] = []
-                capabilities_by_ref[ref] = copy
-            capabilities_by_ref[ref]["_capelryMatchedQueries"].append(query)
-    return filter_capabilities(list(capabilities_by_ref.values()), args)
+def ard_search_rank(entry: dict[str, Any]) -> tuple[float, int]:
+    score = entry.get("score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else float("-inf")
+    matched_queries = entry.get("_capelryMatchedQueries")
+    query_count = len(matched_queries) if isinstance(matched_queries, list) else 0
+    return numeric_score, query_count
 
 
 def collect_ard_search_results(base: str, args: argparse.Namespace, queries: list[str], per_query_limit: int | None = None) -> list[dict[str, Any]]:
@@ -1207,19 +1067,25 @@ def collect_ard_search_results(base: str, args: argparse.Namespace, queries: lis
             identifier = entry.get("identifier")
             if not isinstance(identifier, str) or not identifier:
                 continue
-            if identifier not in entries_by_identifier:
-                copy = dict(entry)
-                copy["_capelryMatchedQueries"] = []
-                entries_by_identifier[identifier] = copy
-            entries_by_identifier[identifier]["_capelryMatchedQueries"].append(query)
-    return list(entries_by_identifier.values())
+            existing = entries_by_identifier.get(identifier)
+            if existing is None:
+                existing = dict(entry)
+                existing["_capelryMatchedQueries"] = []
+                entries_by_identifier[identifier] = existing
+            elif ard_search_rank(entry)[0] > ard_search_rank(existing)[0]:
+                existing["score"] = entry.get("score")
+            matched_queries = existing["_capelryMatchedQueries"]
+            if query not in matched_queries:
+                matched_queries.append(query)
+    return sorted(entries_by_identifier.values(), key=ard_search_rank, reverse=True)
 
 
 def command_search(args: argparse.Namespace) -> None:
     base = registry_base(args)
     warn_unsupported_legacy_filters(args)
-    queries = expanded_queries(args.query) if args.expand else [args.query]
-    display_limit = result_limit(args.limit)
+    queries = expanded_queries(args.query)[: query_budget(args.max_queries)] if args.expand else [args.query]
+    display_limit = min(result_limit(args.limit), API_SEARCH_LIMIT_MAX)
+    metrics = search_cost_metrics(queries, display_limit)
 
     entries = collect_ard_search_results(base, args, queries, per_query_limit=display_limit)
     limited_entries = entries[:display_limit]
@@ -1231,17 +1097,32 @@ def command_search(args: argparse.Namespace) -> None:
                 "query": args.query,
                 "queries": queries,
                 "request": ard_search_payload(args, args.query, page_size=display_limit),
+                "metrics": metrics,
                 "count": len(entries),
                 "limit": display_limit,
-                "suggestedQueries": expanded_queries(args.query)[1:],
-                "entries": [ard_entry_output(entry, base) for entry in limited_entries],
+                "suggestedQueries": expanded_queries(args.query)[1 : query_budget(args.max_queries)],
+                "entries": [
+                    ard_entry_output(
+                        entry,
+                        base,
+                        install_target=args.install_snippet,
+                        query=args.query,
+                        explain_relevance=args.explain_relevance,
+                    )
+                    for entry in limited_entries
+                ],
             }
         )
         return
     if not entries:
         print("No ARD entries found.")
         return
-    print_ard_entries(limited_entries)
+    print_ard_entries(
+        limited_entries,
+        install_target=args.install_snippet,
+        query=args.query,
+        explain_relevance=args.explain_relevance,
+    )
 
 
 def command_explore(args: argparse.Namespace) -> None:
@@ -1264,10 +1145,21 @@ def command_info(args: argparse.Namespace) -> None:
         raise SystemExit(f"No ARD entry found for {args.ref}")
     entry = entries[0]
     if args.json_output:
-        output = ard_entry_output(entry, base)
-        if args.install_snippet:
-            ref = ard_slug(entry) or str(output.get("identifier") or args.ref)
-            output["installSnippet"] = install_snippet(ref, args.install_snippet)
+        output = ard_entry_output(entry, base, install_target=args.install_snippet)
+        detail = ard_detail_summary(entry, args.install_snippet, base)
+        for key in (
+            "source",
+            "sourcePath",
+            "sourceRef",
+            "sourceArchiveUrl",
+            "trustIdentity",
+            "trustIdentityType",
+            "provenance",
+            "checksum",
+            "checksumEvidence",
+        ):
+            if key in detail:
+                output[key] = detail[key]
         print_json({"registry": base, "api": "ard", "entry": output})
         return
     print_ard_detail_summaries([ard_detail_summary(entry, args.install_snippet, base)])
@@ -1300,26 +1192,40 @@ def command_bulk_info(args: argparse.Namespace) -> None:
 
 
 def compact_query(query: str) -> str:
-    return " ".join(tokenize(query)) or query.strip()
+    parts = []
+    for part in query.split():
+        plain_word = re.sub(r"^[^\w]+|[^\w]+$", "", part, flags=re.UNICODE).casefold()
+        if plain_word not in STOP_WORDS:
+            parts.append(part)
+    return " ".join(parts) or query.strip()
 
 
-def discover_queries(query: str, extra_queries: list[str] | None, expand: bool) -> list[str]:
-    compact = compact_query(query)
-    seeds: list[str] = []
-    if expand:
-        seeds.extend(expanded_queries(query)[1:])
-    seeds.extend([compact, query])
+def discover_queries(
+    query: str,
+    extra_queries: list[str] | None,
+    expand: bool,
+    max_queries: int = DEFAULT_QUERY_BUDGET,
+) -> list[str]:
+    seeds = [compact_query(query)]
     for extra in extra_queries or []:
         seeds.extend(compact_query(part) for part in extra.split(","))
-    return dedupe(seeds)
+    if expand:
+        seeds.extend(expanded_queries(query)[1:])
+    return dedupe(seeds)[: query_budget(max_queries)]
 
 
 def command_discover(args: argparse.Namespace) -> None:
     base = registry_base(args)
     warn_unsupported_legacy_filters(args)
-    queries = discover_queries(args.query, args.extra_query, expand=not args.no_expand)
+    queries = discover_queries(
+        args.query,
+        args.extra_query,
+        expand=not args.no_expand,
+        max_queries=args.max_queries,
+    )
     top = min(max(args.top, 1), 25)
-    api_limit = clamp_api_search_limit(max(args.search_limit, top, 25))
+    api_limit = clamp_api_search_limit(max(args.search_limit, top)) or top
+    metrics = search_cost_metrics(queries, api_limit)
 
     entries = collect_ard_search_results(base, args, queries, per_query_limit=api_limit)
     shortlist = entries[:top]
@@ -1332,17 +1238,25 @@ def command_discover(args: argparse.Namespace) -> None:
                 "query": args.query,
                 "queries": queries,
                 "filters": build_ard_filter(args),
-                "entries": [ard_entry_output(entry, base) for entry in shortlist],
+                "metrics": metrics,
+                "entries": [
+                    ard_entry_output(entry, base, install_target=args.install_snippet)
+                    for entry in shortlist
+                ],
                 "shortlist": summaries,
             }
         )
         return
 
+    print("Queries: " + "; ".join(queries))
+    print(
+        f"Search budget: {metrics['requestCount']} request(s) x "
+        f"{metrics['perRequestLimit']} results (max {metrics['candidateEnvelope']} candidates)"
+    )
     if not shortlist:
         print("No ARD entries found.")
         return
 
-    print("Queries: " + "; ".join(queries))
     print_ard_detail_summaries(summaries)
 
 
@@ -1546,41 +1460,6 @@ def download_github_path(
             out.write_bytes(fetch_github_bytes(entry["download_url"]))
         elif entry_type == "dir":
             download_github_path(owner, repo, entry_path, ref, dest, root_path)
-
-
-def install_from_github_source(capability: dict[str, Any], dest: Path, force: bool) -> str | None:
-    source = capability.get("source") or {}
-    repository = source.get("repository")
-    source_path_value = source.get("path")
-    branch = source.get("defaultBranch") or "main"
-    if not isinstance(repository, str) or not isinstance(source_path_value, str):
-        return None
-    parts = github_parts(repository)
-    if parts is None:
-        return None
-
-    owner, repo = parts
-    if dest.exists() and not force:
-        raise SystemExit(f"Destination already exists: {dest}\nUse --force to replace it.")
-
-    archive_error: BaseException | None = None
-    try:
-        download_github_archive_path(owner, repo, source_path_value, branch, dest, force)
-        return "declared GitHub codeload archive fallback"
-    except (SystemExit, zipfile.BadZipFile) as error:
-        archive_error = error
-
-    try:
-        prepare_dest(dest, force)
-        download_github_path(owner, repo, source_path_value, branch, dest)
-    except SystemExit as error:
-        shutil.rmtree(dest, ignore_errors=True)
-        raise SystemExit(f"{error}\n\nGitHub archive fallback also failed:\n{archive_error}") from error
-
-    if not (dest / "SKILL.md").exists():
-        shutil.rmtree(dest, ignore_errors=True)
-        raise SystemExit("GitHub source fallback completed but did not produce SKILL.md")
-    return "declared GitHub Contents API fallback"
 
 
 def resolve_install_dest(args: argparse.Namespace, capability_name: str) -> Path:
@@ -2993,6 +2872,12 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=20)
     search.add_argument("--expand", action="store_true", help="Search related terms when an exact phrase is too narrow")
+    search.add_argument(
+        "--max-queries",
+        type=int,
+        default=DEFAULT_QUERY_BUDGET,
+        help=f"Maximum requests used with --expand (default: {DEFAULT_QUERY_BUDGET}, max: {MAX_QUERY_BUDGET})",
+    )
     search.add_argument("--type", dest="package_type", help="Filter by package type, e.g. skill, agent, prompt")
     search.add_argument("--media-type", action="append", help="ARD media type filter; repeat or comma-separate values")
     search.add_argument("--publisher", action="append", help="ARD publisher filter; repeat or comma-separate values")
@@ -3032,12 +2917,28 @@ def build_parser() -> argparse.ArgumentParser:
     add_json_argument(explore)
     explore.set_defaults(func=command_explore)
 
-    discover = subparsers.add_parser("discover", help="Search related ARD queries, inspect top results, and print a shortlist")
+    discover = subparsers.add_parser("discover", help="Search related ARD queries, rank results, and print a shortlist")
     discover.add_argument("query")
     discover.add_argument("--query", dest="extra_query", action="append", help="Additional related query; repeat or comma-separate")
-    discover.add_argument("--top", type=int, default=5, help="Number of top refs to bulk-inspect (max 25)")
-    discover.add_argument("--search-limit", type=int, default=10, help="Per-query search limit before dedupe")
-    discover.add_argument("--no-expand", action="store_true", help="Disable built-in related-query expansion")
+    discover.add_argument(
+        "--top",
+        type=int,
+        default=DEFAULT_DISCOVERY_TOP,
+        help=f"Number of shortlist entries to return (default: {DEFAULT_DISCOVERY_TOP}, max: 25)",
+    )
+    discover.add_argument(
+        "--search-limit",
+        type=int,
+        default=DEFAULT_DISCOVERY_SEARCH_LIMIT,
+        help=f"Per-query result limit before dedupe (default: {DEFAULT_DISCOVERY_SEARCH_LIMIT})",
+    )
+    discover.add_argument(
+        "--max-queries",
+        type=int,
+        default=DEFAULT_QUERY_BUDGET,
+        help=f"Maximum search requests (default: {DEFAULT_QUERY_BUDGET}, max: {MAX_QUERY_BUDGET})",
+    )
+    discover.add_argument("--no-expand", action="store_true", help="Use only the compact user query plus explicit --query values")
     discover.add_argument("--type", dest="package_type", default="skill", help="Filter by package type (default: skill)")
     discover.add_argument("--media-type", action="append", help="ARD media type filter; repeat or comma-separate values")
     discover.add_argument("--publisher", action="append", help="ARD publisher filter; repeat or comma-separate values")
@@ -3052,7 +2953,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--status", help="Compatibility no-op: current public ARD routes do not expose status filters")
     discover.add_argument("--domain", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
     discover.add_argument("--phase", help="Compatibility no-op: use query terms or --filter on supported ARD fields")
-    add_install_snippet_argument(discover, default="agents-project")
+    add_install_snippet_argument(discover)
     add_json_argument(discover)
     discover.set_defaults(func=command_discover)
 
@@ -3068,7 +2969,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bulk-inspect up to 25 ARD identifiers or slugs with /agents",
     )
     bulk_info.add_argument("refs", nargs="+", help="Refs as space-separated or comma-separated ARD identifiers or slugs")
-    add_install_snippet_argument(bulk_info, default="agents-project")
+    add_install_snippet_argument(bulk_info)
     add_json_argument(bulk_info)
     bulk_info.set_defaults(func=command_bulk_info)
 

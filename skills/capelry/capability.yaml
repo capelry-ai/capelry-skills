@@ -3,7 +3,7 @@ kind: Capability
 metadata:
   namespace: capelry
   name: capelry
-  version: 2.1.0
+  version: 2.2.0
   title: Capelry
 spec:
   type: skill
@@ -14,6 +14,8 @@ spec:
     additional:
       - BOOTSTRAP.md
       - references/harnesses.md
+      - references/cli.md
+      - references/maintenance.md
       - ai-catalog.json
   compatibility:
     - target: agents-skills
@@ -110,13 +112,22 @@ spec:
     - path: scripts/bootstrap.py
       mediaType: text/x-python
       required: true
+    - path: scripts/package_skill.py
+      mediaType: text/x-python
+      required: true
+    - path: references/cli.md
+      mediaType: text/markdown
+      required: true
+    - path: references/maintenance.md
+      mediaType: text/markdown
+      required: true
   install:
     - target: agents-project
       path: .agents/skills/capelry
       notes: Portable project target for harnesses that document .agents/skills discovery.
       commands:
         - mkdir -p .agents/skills/capelry
-        - unzip -oq capelry-2.1.0.zip -d .agents/skills/capelry
+        - unzip -oq capelry-2.2.0.zip -d .agents/skills/capelry
     - target: claude-project
       path: .claude/skills/capelry
       notes: Project-local Claude Code install.
